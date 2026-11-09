@@ -1,6 +1,6 @@
 # Third-party notices / 第三方声明
 
-Copyright © 2026 smbplayer contributors. Original project code is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE). Dependencies and generated tooling retain their own copyright and license terms. No endorsement by their authors is implied.
+Copyright © 2026 smbplayer contributors. Original project code is licensed under GPL-3.0-or-later; see [LICENSE](PROJECT-LICENSE.txt). Dependencies and generated tooling retain their own copyright and license terms. No endorsement by their authors is implied.
 
 | Component | Version | License / upstream |
 | --- | --- | --- |
