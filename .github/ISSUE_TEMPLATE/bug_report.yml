@@ -1,0 +1,21 @@
+name: Bug report / 问题反馈
+description: 播放、网络或遥控器问题
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: App 版本、设备、Android 版本、32 位支持情况、播放来源
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤、预期与实际表现
+      description: 请勿提供私人地址、账号或密码。卡画面时请说明声音和进度是否继续。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏日志 / 截图 / 媒体编码信息

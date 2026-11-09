@@ -1,0 +1,13 @@
+name: Feature request / 功能建议
+description: 描述想解决的观看或操作问题
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景与问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议行为及遥控器操作
