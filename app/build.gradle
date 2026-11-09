@@ -16,6 +16,8 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
     packaging { resources { excludes += ['META-INF/versions/**', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*'] } }
+    // Keep dependency and project license notices available in distributed APKs.
+    sourceSets { main.assets.srcDir(rootProject.file('licenses')) }
 }
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
