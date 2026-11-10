@@ -15,6 +15,16 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Development distribution: retain this machine's existing APK signature.
+            // Production distributors should replace this with their private signing config.
+            signingConfig signingConfigs.debug
+        }
+    }
     packaging { resources { excludes += ['META-INF/versions/**', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*'] } }
     // Keep dependency and project license notices available in distributed APKs.
     sourceSets { main.assets.srcDir(rootProject.file('licenses')) }

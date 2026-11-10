@@ -1,5 +1,7 @@
 # v0.29 验证记录
 
+追加标准压缩构建：assembleRelease / lintRelease 通过，9 组主机检查通过。APK 从 46,423,026 降到 43,387,677 字节，减少 6.54%；所有原生库与未压缩版逐字节一致。仅 armeabi-v7a、无测试入口、许可证保留及 v1/v2 签名检查通过。保守保留 JNI / SMB / 加密库，针对依赖的可选桌面 JAAS、Kerberos、LDAP、Servlet 和 SLF4J binder 缺失引用使用明确的 dontwarn 规则。本应用使用匿名 / NTLM SMB 认证。未做压缩版设备播放回归；主机检查不代替实际设备的字幕、音轨及跳转验证。
+
 主页改为本地 / SMB 两个卡片，设置位于右上角；移除 M3U 导入与串流来源管理，升级清理这两类来源。SMB 播放和缓存核心保持原实现。
 
 - 本地 assembleDebug / lintDebug、9 组主机检查及 APK 32 位 ABI / 测试隔离检查通过。

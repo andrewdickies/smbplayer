@@ -93,6 +93,8 @@ python3 scripts/check.py
 
 Windows 使用 `gradlew.bat`、`python`。输出位于 `app/build/outputs/apk/debug/app-debug.apk`。
 
+压缩构建：`./gradlew :app:assembleRelease :app:lintRelease`，输出 `app/build/outputs/apk/release/app-release.apk`。启用 R8 与无用资源裁剪；保守保留 LibVLC JNI、SMB 和加密相关类，不修改原生库。当前仍使用构建机器的开发签名，以便本机覆盖测试，并非生产私钥签名。CI 提供 `smbplayer-armeabi-v7a-optimized` 产物及反混淆 mapping；不同机器的签名不保证一致。正式分发请替换为自己的固定签名配置，保管每次发布对应的 mapping 文件。
+
 CI 自动执行 9 组无网络主机检查、Android 构建、lint 及 APK ABI / 测试隔离检查，并保存 APK 与 lint 报告。设备、真实 SMB 和媒体样本测试为可选手工检查，见 [checks/README.md](checks/README.md)。验证历史与硬件限制见 [VALIDATION.md](VALIDATION.md)。
 
 ## 项目结构
