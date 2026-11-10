@@ -10,7 +10,7 @@ JDK 17、Python 3.9+：
 python3 scripts/check.py
 ```
 
-运行缓存、索引、并发读取、冻帧恢复状态机、网速、跳转策略、文件显示和排序共 9 组检查。测试创建自己的临时目录并清理；不需要外网、媒体下载、ADB 或账号。Android 构建和 lint 单独运行 `./gradlew :app:assembleDebug :app:lintDebug`。
+运行缓存、索引、并发读取、冻帧恢复状态机、网速、跳转策略、文件显示和排序共 10 组检查。测试创建自己的临时目录并清理；不需要外网、媒体下载、ADB 或账号。Android 构建和 lint 单独运行 `./gradlew :app:assembleDebug :app:lintDebug`。
 
 ## 媒体 / SMB 手工检查
 

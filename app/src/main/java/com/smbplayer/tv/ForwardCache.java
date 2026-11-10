@@ -30,14 +30,14 @@ final class ForwardCache implements Closeable {
     ForwardCache(PlaybackByteCache cache,long size,RangeReadAhead.Factory factory,int concurrency){
         this.cache=cache;this.size=size;this.factory=factory;
         budget=Math.max(CHUNK,cache.capacity()-Math.min(8L*1024*1024,cache.capacity()/8));
-        high=Math.min(budget,64L*1024*1024);low=high/2;
+        high=Math.min(budget,64L*1024*1024);low=high*4/5;
         workers=new ThreadPoolExecutor(concurrency,concurrency,0,TimeUnit.MILLISECONDS,new PriorityBlockingQueue<>(),r->{Thread t=new Thread(r,"smb-disk-prefill");t.setDaemon(true);return t;});
         pump=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"smb-prefill-control");t.setDaemon(true);return t;});
         pump.scheduleWithFixedDelay(this::wake,0,200,TimeUnit.MILLISECONDS);
     }
     static long diskCapacity(long fileSize,long free){
-        long unit=1024L*1024,reserve=Math.min(512*unit,Math.max(64*unit,free/4));
-        long available=Math.max(0,Math.min(1024*unit,free-reserve));
+        long unit=1024L*1024,reserve=Math.max(1024*unit,free*15/100);
+        long available=Math.max(0,Math.min(5L*1024*unit,free-reserve));
         return Math.min(available/unit,1+(Math.max(1,fileSize)-1)/unit)*unit;
     }
     long capacity(){return cache.capacity();}
@@ -45,8 +45,8 @@ final class ForwardCache implements Closeable {
     long anchor(){return anchor;}
     int inFlight(){synchronized(jobs){return jobs.size();}}
     void policy(long bytes,long aheadMs,boolean accurate){
-        high=accurate?budget:Math.max(CHUNK,Math.min(budget,bytes));low=high/2;timeControlled=accurate;
-        if(accurate){if(aheadMs>=60000)fill=false;else if(aheadMs<30000)fill=true;}
+        high=accurate?budget:Math.max(CHUNK,Math.min(budget,bytes));low=high*4/5;timeControlled=accurate;
+        if(accurate){if(aheadMs>=300000)fill=false;else if(aheadMs<240000)fill=true;}
         else fill=true;
         wake();
     }

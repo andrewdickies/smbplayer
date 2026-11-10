@@ -54,7 +54,7 @@ jobs:
           path: app/build/reports/lint-results-debug.*
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v0.29]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v0.30]')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -63,26 +63,26 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: smbplayer-armeabi-v7a-optimized
-      - name: Publish v0.29
+      - name: Publish v0.30
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cp apk/release/app-release.apk smbplayer-v0.29-armeabi-v7a.apk
+          cp apk/release/app-release.apk smbplayer-v0.30-armeabi-v7a.apk
           cp mapping/release/mapping.txt mapping.txt
-          sha256sum smbplayer-v0.29-armeabi-v7a.apk > SHA256SUMS
+          sha256sum smbplayer-v0.30-armeabi-v7a.apk > SHA256SUMS
           cat > notes.md <<'EOF'
-          ## smbplayer 0.29
-          - Local storage and SMB only; removed M3U and network-stream modules.
-          - Two home cards, settings in the top-right corner, updated remote focus navigation.
-          - Conservative R8/resource shrinking reduced the local APK from 46.4 MB to 43.4 MB (6.54%); LibVLC native libraries unchanged.
-          - Redmi K30 checks cover real SMB playback, advancing displayed frames, pause/resume, forward/back seek, paused seek, track selection and controls.
-          - Android 6.0+, armeabi-v7a (32-bit ARM) only. Includes license notices, SHA256SUMS and R8 mapping.
+          ## smbplayer 0.30
+          - Hidden-control seeking reuses the existing timeline: target position, total duration and cumulative seek offset; no header or action buttons.
+          - Preview hides after about two seconds of inactivity, and stays visible while buffering/recovering.
+          - Forward cache target increased to five minutes, refilling below four minutes; total disk budget up to 5 GiB, reduced to preserve at least 1 GiB or 15% of initially available space.
+          - Cache grows on writes. Retains watched data within budget and prioritizes eviction of older, distant blocks outside the protected playback window.
+          - Android 6.0+, armeabi-v7a only. Optimized build; LibVLC native engine unchanged.
 
-          Device checks used a locally signed optimized build of this source. This attachment is rebuilt by GitHub Actions with a development key; its signature may differ from earlier installations. Preserve your source settings before uninstalling. TV HDR, CEC, passthrough and vendor decoder behavior remain hardware-dependent.
+          Redmi K30 checks use a locally signed optimized build of this source. This attachment is rebuilt in GitHub Actions with a development key; its signature may differ from existing installations. Includes SHA256SUMS and the R8 mapping file. Actual TV decoder/HDR/CEC/passthrough behavior remains device-dependent.
           EOF
-          if ! gh release view v0.29 >/dev/null 2>&1; then
-            gh release create v0.29 --target "$GITHUB_SHA" --title "smbplayer v0.29" --notes-file notes.md --draft
+          if ! gh release view v0.30 >/dev/null 2>&1; then
+            gh release create v0.30 --target "$GITHUB_SHA" --title "smbplayer v0.30" --notes-file notes.md --draft
           fi
-          gh release upload v0.29 smbplayer-v0.29-armeabi-v7a.apk SHA256SUMS mapping.txt
-          gh release edit v0.29 --draft=false --latest
+          gh release upload v0.30 smbplayer-v0.30-armeabi-v7a.apk SHA256SUMS mapping.txt
+          gh release edit v0.30 --draft=false --latest

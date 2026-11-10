@@ -15,7 +15,7 @@ CLASSES = [
 CHECKS = [
     "BufferIndexCheck", "Mp4EdgeCheck", "RangeReadAheadCheck", "ForwardCacheCheck",
     "VideoRecoveryCheck", "DownloadRateCheck", "TvSeekPolicyCheck",
-    "FileDisplayCheck", "PlaylistOrderCheck",
+    "FileDisplayCheck", "PlaylistOrderCheck", "CacheRetentionCheck",
 ]
 
 
@@ -35,7 +35,7 @@ def main():
             print("Running " + name, flush=True)
             subprocess.run([java_tool("java"), "-Xmx128m", "-cp", output,
                             "com.smbplayer.tv." + name], check=True, cwd=ROOT)
-    print("All 9 host checks passed.")
+    print("All %d host checks passed." % len(CHECKS))
 
 
 if __name__ == "__main__":

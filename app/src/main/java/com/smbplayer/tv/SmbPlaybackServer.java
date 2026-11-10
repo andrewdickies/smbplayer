@@ -99,7 +99,7 @@ final class SmbPlaybackServer extends NanoHTTPD {
         ForwardCache f=forward;if(f==null)return;
         long at=indexedByte(effective);indexedPosition=at>=0;if(at>=0)f.advance(at);
         long ahead=0;for(long[] range:buffered)if(range[0]<=effective+250&&range[1]>effective)ahead=Math.max(ahead,range[1]-effective);
-        long bytes=durationMs>0?(long)Math.min(Long.MAX_VALUE/2,Math.max(16L*1024*1024,size*(60000.0/durationMs))):64L*1024*1024;
+        long bytes=durationMs>0?(long)Math.min(Long.MAX_VALUE/2,Math.max(16L*1024*1024,size*(300000.0/durationMs))):64L*1024*1024;
         // Unsupported indexes use a bounded byte target, never a made-up time coverage bar.
         f.policy(bytes,ahead,index!=null&&at>=0);
     }

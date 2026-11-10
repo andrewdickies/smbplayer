@@ -14,7 +14,7 @@ A simple Android TV video player built for a remote control. Supports SMB shares
 - M3U and network-stream modules have been removed. Existing local and SMB sources are preserved. Multiple saved sources; encrypted SMB passwords on the device; no automatic whole-device scan.
 - Remote focus navigation, large text, file size / modification time and sorting.
 - Playback controls: pause, playlist, aspect ratio, speed, subtitles, audio tracks, rotation / flip and sleep timer.
-- Independent SMB forward disk cache: up to 1 GiB, eight workers. For indexed media, target around 60 seconds and refill below 30 seconds; other formats use a byte estimate.
+- Independent SMB forward disk cache: up to 5 GiB, eight workers. For indexed media, target around 5 minutes and refill below 4 minutes; other formats use a byte estimate.
 - Seek / resume / frozen-picture recovery, with a single buffering overlay and download rate.
 
 ## Remote controls
@@ -41,7 +41,7 @@ python3 scripts/check.py
 
 On Windows use `gradlew.bat` and `python`. Output: `app/build/outputs/apk/debug/app-debug.apk`.
 
-There are nine offline host checks. Device / SMB checks need your own explicitly configured test fixtures; they are not packaged in the app. See [testing](../checks/README.md), [contributing](../CONTRIBUTING.md) and [architecture](ARCHITECTURE.md).
+There are ten offline host checks. Device / SMB checks need your own explicitly configured test fixtures; they are not packaged in the app. See [testing](../checks/README.md), [contributing](../CONTRIBUTING.md) and [architecture](ARCHITECTURE.md).
 
 ## Hardware limits
 

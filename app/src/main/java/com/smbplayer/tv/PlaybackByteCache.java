@@ -38,7 +38,7 @@ final class PlaybackByteCache implements Closeable {
         RandomAccessFile opened = null;
         try {
             opened = new RandomAccessFile(file, "rw");
-            opened.setLength((long) blockSize * slots);
+            // Grow on writes instead of reserving the full cache budget.
             data = opened;
         } catch (IOException e) {
             if (opened != null) opened.close();
@@ -81,12 +81,18 @@ final class PlaybackByteCache implements Closeable {
             Block block = blocks.get(key);
             if (block != null) { blocks.remove(key); blocks.put(key, block); }
             if (block == null) {
+                if(file.getUsableSpace()<64L*1024*1024)throw new IOException("Disk space exhausted");
                 int slot = blocks.size();
                 if (slot == slots) {
                     Long victim=null;
+                    int examined=0;long farthest=-1;
                     for(Long candidate:blocks.keySet()) {
                         long start=candidate*blockSize;
-                        if(start+blockSize<=protectedStart || start>=protectedEnd){victim=candidate;break;}
+                        if(start+blockSize<=protectedStart || start>=protectedEnd){
+                            long distance=start<protectedStart?protectedStart-start:start-protectedEnd;
+                            if(distance>farthest){victim=candidate;farthest=distance;}
+                            if(++examined>=Math.max(1,slots/4))break;
+                        }
                     }
                     if(victim==null)victim=blocks.keySet().iterator().next();
                     slot=blocks.remove(victim).slot;

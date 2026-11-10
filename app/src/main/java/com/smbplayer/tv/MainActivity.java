@@ -202,10 +202,19 @@ public final class MainActivity extends Activity {
             MediaPlayer.ScaleType.SURFACE_4_3, MediaPlayer.ScaleType.SURFACE_ORIGINAL
     };
     private boolean controlsShown;
+    private boolean seekPreviewShown;
+    private long seekPreviewUntil,seekPreviewOrigin;
+    private final Runnable hideSeekPreview=()->{
+        if(!seekPreviewShown)return;
+        if(buffering||pendingSeek>=0||videoRecovery.active()){ui.postDelayed(this.hideSeekPreview,250);return;}
+        if(android.os.SystemClock.uptimeMillis()<seekPreviewUntil){ui.postDelayed(this.hideSeekPreview,250);return;}
+        seekPreviewShown=false;if(!controlsShown&&controls!=null)controls.setVisibility(View.GONE);
+    };
     private boolean keepControlsHidden;
     private boolean startWithChromeHidden;
     private long exitPromptAt;
     private final Runnable hideControls = () -> {
+        seekPreviewShown=false;ui.removeCallbacks(hideSeekPreview);
         keepControlsHidden = true;
         controlsShown = false;
         header.animate().cancel(); controls.animate().cancel();
@@ -225,7 +234,7 @@ public final class MainActivity extends Activity {
             long position = player.getTime();
             if(playbackServer!=null)playbackServer.updatePlayback(position,player.getLength());
             if(monitorVideoRecovery(position))return;
-            if (!dragging && pendingSeek < 0) updateTimeline(videoRecovery.active()?frameCheckPosition:position);
+            if (!dragging && pendingSeek < 0 && !seekPreviewShown) updateTimeline(videoRecovery.active()?frameCheckPosition:position);
             cachedTimeline = playbackServer == null ? java.util.Collections.emptyList()
                     : playbackServer.bufferedRanges(player.getLength());
             timeline.invalidate();
@@ -2056,7 +2065,7 @@ public final class MainActivity extends Activity {
                 case 2:showSubtitleSize();break;
                 case 3:showChoices("播放结束",new String[]{"顺序播放","单集循环","列表循环"},Math.floorMod(settings.getInt("loop",0),3),i->settings.edit().putInt("loop",i).apply());break;
                 case 4:showCompatibilitySettings();break;
-                case 5:showSettingsInfo("关于","smbplayer 0.29 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
+                case 5:showSettingsInfo("关于","smbplayer 0.30 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
                 default:break;
             }
         });
@@ -2414,7 +2423,17 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void showSeekPreview(long origin){
+        if(!seekPreviewShown)seekPreviewOrigin=origin;
+        seekPreviewShown=true;seekPreviewUntil=android.os.SystemClock.uptimeMillis()+2000;
+        header.setVisibility(View.GONE);controls.setVisibility(View.VISIBLE);
+        for(int i=0;i<controls.getChildCount();i++){View child=controls.getChildAt(i);child.setVisibility(child==timeline||child==playbackStatus?View.VISIBLE:View.GONE);}
+        ui.removeCallbacks(hideSeekPreview);ui.postDelayed(hideSeekPreview,2000);
+    }
+
     private void showControls() {
+        seekPreviewShown=false;ui.removeCallbacks(hideSeekPreview);
+        for(int i=0;i<controls.getChildCount();i++)controls.getChildAt(i).setVisibility(View.VISIBLE);
         keepControlsHidden = false;
         if (!controlsShown) {
             controlsShown = true;
@@ -2454,6 +2473,7 @@ public final class MainActivity extends Activity {
         if (reveal) showControls();
         if (!prepared || !player.isSeekable() || player.getLength() <= 0) return;
         long current = pendingSeek >= 0 ? pendingSeek : player.getTime();
+        if(!reveal)showSeekPreview(current);
         pendingSeek = Math.max(0, Math.min(player.getLength(), current + delta));
         updateTimeline(pendingSeek);
         ui.removeCallbacks(applySeek);
@@ -2470,6 +2490,7 @@ public final class MainActivity extends Activity {
         String end = duration <= 0 ? "—" : false
                 ? "−" + time(duration - position) : time(duration);
         String value = time(position) + " / " + end;
+        if(seekPreviewShown){long delta=position-seekPreviewOrigin;value+=(delta>=0?"   +":"   ")+delta/1000+" s";}
         if (!value.contentEquals(playbackStatus.getText())) playbackStatus.setText(value);
     }
 
@@ -2502,6 +2523,7 @@ public final class MainActivity extends Activity {
         playbackDialogOrigin = null;
         if (dialog != null) dialog.dismiss();
         ui.removeCallbacks(tick);
+        ui.removeCallbacks(hideSeekPreview);seekPreviewShown=false;
         ui.removeCallbacks(hideControls);
         if (controls != null) controls.animate().cancel();
         ui.removeCallbacks(applySeek);
@@ -2579,9 +2601,7 @@ public final class MainActivity extends Activity {
                 if (down && event.getRepeatCount() % 4 == 0) {
                     int step = TvSeekPolicy.stepMillis(seekStep(), event.getRepeatCount());
                     seek(key == KeyEvent.KEYCODE_DPAD_LEFT ? -step : step, false);
-                    flashNotice((key == KeyEvent.KEYCODE_DPAD_LEFT ? "后退 " : "前进 ")
-                            + (step >= 60000 ? step / 60000 + " 分钟" : step / 1000 + " 秒")
-                            + " · " + time(Math.max(0, pendingSeek >= 0 ? pendingSeek : player == null ? 0 : player.getTime())));
+
                 }
             } else if (down && first) { showPlaylist(); }
             return true;
