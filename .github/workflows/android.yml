@@ -54,7 +54,7 @@ jobs:
           path: app/build/reports/lint-results-debug.*
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v0.28]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v0.29]')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -62,24 +62,27 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: smbplayer-armeabi-v7a-debug
-      - name: Publish v0.28
+          name: smbplayer-armeabi-v7a-optimized
+      - name: Publish v0.29
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          mv app-debug.apk smbplayer-v0.28-armeabi-v7a.apk
-          sha256sum smbplayer-v0.28-armeabi-v7a.apk > SHA256SUMS
+          cp apk/release/app-release.apk smbplayer-v0.29-armeabi-v7a.apk
+          cp mapping/release/mapping.txt mapping.txt
+          sha256sum smbplayer-v0.29-armeabi-v7a.apk > SHA256SUMS
           cat > notes.md <<'EOF'
-          ## smbplayer 0.28
-          - SMB 主动前向磁盘缓存最高 1 GiB，8 工作者；支持索引时目标约 60 秒，低于 30 秒补充。
-          - 加强跳转、暂停继续及画面停滞恢复，缓冲时显示实时网速。
-          - Android 6.0+，仅 armeabi-v7a（32 位 ARM）。
-          - 包含项目和第三方许可证声明。
-          
-          本附件为 GitHub Actions 构建的测试签名 APK。签名可能不同于此前本机构建，不能保证覆盖安装；卸载会删除本地设置，请先保留自己的来源信息。电视硬解、HDR、CEC 和透传表现仍取决于设备。
+          ## smbplayer 0.29
+          - Local storage and SMB only; removed M3U and network-stream modules.
+          - Two home cards, settings in the top-right corner, updated remote focus navigation.
+          - Conservative R8/resource shrinking reduced the local APK from 46.4 MB to 43.4 MB (6.54%); LibVLC native libraries unchanged.
+          - Redmi K30 checks cover real SMB playback, advancing displayed frames, pause/resume, forward/back seek, paused seek, track selection and controls.
+          - Android 6.0+, armeabi-v7a (32-bit ARM) only. Includes license notices, SHA256SUMS and R8 mapping.
+
+          Device checks used a locally signed optimized build of this source. This attachment is rebuilt by GitHub Actions with a development key; its signature may differ from earlier installations. Preserve your source settings before uninstalling. TV HDR, CEC, passthrough and vendor decoder behavior remain hardware-dependent.
           EOF
-          if ! gh release view v0.28 >/dev/null 2>&1; then
-            gh release create v0.28 --target "$GITHUB_SHA" --title "smbplayer v0.28" --notes-file notes.md --latest
+          if ! gh release view v0.29 >/dev/null 2>&1; then
+            gh release create v0.29 --target "$GITHUB_SHA" --title "smbplayer v0.29" --notes-file notes.md --draft
           fi
-          gh release upload v0.28 smbplayer-v0.28-armeabi-v7a.apk SHA256SUMS --clobber
+          gh release upload v0.29 smbplayer-v0.29-armeabi-v7a.apk SHA256SUMS mapping.txt
+          gh release edit v0.29 --draft=false --latest

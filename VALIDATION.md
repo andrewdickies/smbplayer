@@ -1,6 +1,8 @@
 # v0.29 验证记录
 
-追加标准压缩构建：assembleRelease / lintRelease 通过，9 组主机检查通过。APK 从 46,423,026 降到 43,387,677 字节，减少 6.54%；所有原生库与未压缩版逐字节一致。仅 armeabi-v7a、无测试入口、许可证保留及 v1/v2 签名检查通过。保守保留 JNI / SMB / 加密库，针对依赖的可选桌面 JAAS、Kerberos、LDAP、Servlet 和 SLF4J binder 缺失引用使用明确的 dontwarn 规则。本应用使用匿名 / NTLM SMB 认证。未做压缩版设备播放回归；主机检查不代替实际设备的字幕、音轨及跳转验证。
+压缩版设备验收追加：Redmi K30 安装 APK 的 SHA256 与本地待发布压缩包一致。独立辅助 instrumentation（不修改播放器 APK）结合对应 mapping 检查，通过真实 SMB 登录 / 目录 / 持续显示帧推进、暂停继续、前后跳转、暂停时跳转再继续、双栏和选集返回，以及主页设置焦点。另用双音轨、内嵌 SRT 的本地 MKV 样本实际选择第二音轨与字幕，验证轨道 ID 生效、切换和跳转后持续出帧、音频门控恢复。测试全程系统媒体静音。样本重试时关闭续播询问，避免确认弹窗阻挡测试。服务器设置和播放记录从测试前备份恢复；辅助 APK 和样本清理。GitHub Release 附件由同一源码云端重建，开发签名不同于本机，不声称附件逐字节等于设备测试 APK。
+
+追加标准压缩构建：assembleRelease / lintRelease 通过，9 组主机检查通过。APK 从 46,423,026 降到 43,387,677 字节，减少 6.54%；所有原生库与未压缩版逐字节一致。仅 armeabi-v7a、无测试入口、许可证保留及 v1/v2 签名检查通过。保守保留 JNI / SMB / 加密库，针对依赖的可选桌面 JAAS、Kerberos、LDAP、Servlet 和 SLF4J binder 缺失引用使用明确的 dontwarn 规则。本应用使用匿名 / NTLM SMB 认证。Device playback regression was subsequently completed as recorded above.
 
 主页改为本地 / SMB 两个卡片，设置位于右上角；移除 M3U 导入与串流来源管理，升级清理这两类来源。SMB 播放和缓存核心保持原实现。
 
