@@ -385,7 +385,7 @@ public final class MainActivity extends Activity {
 
     private String homeKind() {
         return "usb".equals(sourceKind) ? "local"
-                : java.util.Arrays.asList("local", "nas", "m3u", "stream").contains(sourceKind) ? sourceKind : "nas";
+                : java.util.Arrays.asList("local", "nas").contains(sourceKind) ? sourceKind : "nas";
     }
 
     private void showSetup(String message){showHome(homeKind(),message);}
@@ -402,10 +402,14 @@ public final class MainActivity extends Activity {
         brand.addView(logo, new LinearLayout.LayoutParams(dp(40), dp(40)));
         TextView title = text("smbplayer", 32); title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-2, -2); titleParams.leftMargin = dp(14);
-        brand.addView(title, titleParams); page.addView(brand);
-        String[] kinds={"local","nas","m3u","stream","settings"};
-        String[] labels={"本地存储","SMB 网络","M3U/M3U8","网络串流","设置"};
-        int[] icons={R.drawable.ic_local,R.drawable.ic_smb,R.drawable.ic_playlist,R.drawable.ic_stream,R.drawable.ic_settings};
+        brand.addView(title, titleParams);
+        View spacer=new View(this);brand.addView(spacer,new LinearLayout.LayoutParams(0,1,1));
+        Button settingsButton=button("设置",()->{dashboardFocusKind="settings";showAppSettings();});
+        settingsButton.setId(View.generateViewId());brand.addView(settingsButton);sourceTabs.put("settings",settingsButton);
+        page.addView(brand,new LinearLayout.LayoutParams(-1,-2));
+        String[] kinds={"local","nas"};
+        String[] labels={"本地存储","SMB 网络"};
+        int[] icons={R.drawable.ic_local,R.drawable.ic_smb};
         List<HomeDashboard.Card> cards=new ArrayList<>();
         for(int i=0;i<kinds.length;i++){
             String kind=kinds[i];
@@ -420,6 +424,10 @@ public final class MainActivity extends Activity {
             cards.add(card);sourceTabs.put(kind,card);
         }
         HomeDashboard dashboardContent=new HomeDashboard(this,cards);
+        dashboardContent.setTopFocusId(settingsButton.getId());
+        settingsButton.setNextFocusDownId(cards.get(1).getId());
+        settingsButton.setNextFocusLeftId(cards.get(0).getId());
+        settingsButton.setNextFocusUpId(settingsButton.getId());settingsButton.setNextFocusRightId(settingsButton.getId());
         android.widget.ScrollView scroll=new android.widget.ScrollView(this){
             @Override protected void onMeasure(int width,int height){dashboardContent.setViewportHeight(View.MeasureSpec.getSize(height));super.onMeasure(width,height);}
         };
@@ -439,7 +447,7 @@ public final class MainActivity extends Activity {
         LinearLayout page=column();pageRoot=page;addSourceNavigation(page,kind);
         LinearLayout actions=new LinearLayout(this);
         Button add=button("添加",()->{if("local".equals(kind))pickDocument(Intent.ACTION_OPEN_DOCUMENT_TREE,10);else editHomeSource(kind,null);});
-        add.setContentDescription("local".equals(kind)?"添加文件夹":"nas".equals(kind)?"添加 SMB 服务器":"m3u".equals(kind)?"添加 M3U / M3U8":"添加网络串流");actions.addView(add);moduleHeading.addView(actions);
+        add.setContentDescription("local".equals(kind)?"添加文件夹":"添加 SMB 服务器");actions.addView(add);moduleHeading.addView(actions);
         org.json.JSONArray all=homeSources();List<org.json.JSONObject> items=new ArrayList<>();
         for(int i=0;i<all.length();i++){org.json.JSONObject item=all.optJSONObject(i);if(item!=null&&kind.equals(item.optString("kind")))items.add(item);}
         TextView hint=text(message.isEmpty()?items.isEmpty()?"尚未添加"+("local".equals(kind)?"文件夹":"来源")+"，请选择右上角添加。":"已添加 "+items.size()+" 项 · 长按管理":message,20);hint.setTextColor(SECONDARY);hint.setPadding(0,0,0,dp(14));page.addView(hint);
@@ -465,7 +473,12 @@ public final class MainActivity extends Activity {
 
     private org.json.JSONArray homeSources() {
         try {
-            if(settings.contains("homeSources"))return includeLegacyLocal(new org.json.JSONArray(settings.getString("homeSources","[]")));
+            if(settings.contains("homeSources")) {
+                org.json.JSONArray oldSources=new org.json.JSONArray(settings.getString("homeSources","[]")),kept=new org.json.JSONArray();
+                for(int i=0;i<oldSources.length();i++){org.json.JSONObject item=oldSources.optJSONObject(i);if(item!=null&&("local".equals(item.optString("kind"))||"nas".equals(item.optString("kind"))))kept.put(item);}
+                if(kept.length()!=oldSources.length())settings.edit().putString("homeSources",kept.toString()).apply();
+                return includeLegacyLocal(kept);
+            }
             org.json.JSONArray result = new org.json.JSONArray();
             org.json.JSONArray old = new org.json.JSONArray(settings.getString("savedShares", "[]"));
             if (old.length() == 0 && !settings.getString("host", "").isEmpty()) {
@@ -551,6 +564,7 @@ public final class MainActivity extends Activity {
     }
 
     private void editHomeSource(String kind, org.json.JSONObject existing) {
+        if(!"nas".equals(kind))return;
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(20), dp(12), dp(20), dp(12));
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
@@ -564,9 +578,8 @@ public final class MainActivity extends Activity {
             }
             inputs.put("password", field(form, "密码（保存到设备）", existing == null ? "" : (savedSourcePassword(existing) == null ? "" : savedSourcePassword(existing)),
                     InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD, false));
-        } else inputs.put("url", field(form, "链接", existing == null ? "" : existing.optString("url"),
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI, false));
-        String typeName = "nas".equals(kind) ? "SMB 服务器" : "m3u".equals(kind) ? "M3U / M3U8" : "网络串流";
+        }
+        String typeName = "SMB 服务器";
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle((existing == null ? "添加 " : "编辑 ") + typeName)
                 .setView(scroll).setNegativeButton("取消", null).setPositiveButton("确定", null).create();
         showPlaybackDialog(dialog);
@@ -583,9 +596,6 @@ public final class MainActivity extends Activity {
                     URI uri = new URI("smb", null, item.optString("host"), number, "/" + path + "/", null, null);
                     if (uri.getHost() == null) throw new IllegalArgumentException();
                     item.put("port", String.valueOf(number)).put("share", path);
-                } else {
-                    String url = item.optString("url");
-                    if (!isNetworkMedia(url) || "m3u".equals(kind) && !(url.startsWith("http://") || url.startsWith("https://"))) throw new IllegalArgumentException();
                 }
                 String name = label.getText().toString().trim();
                 item.put("name", name.isEmpty() ? sourceAddress(item) : name);
@@ -635,11 +645,6 @@ public final class MainActivity extends Activity {
                 showPlaybackDialog(new AlertDialog.Builder(this).setTitle("连接 · " + item.optString("name"))
                         .setView(form).setNegativeButton("取消", null).setPositiveButton("连接", (dialog, which) -> connectHomeSource(item, secretInput.getText().toString())).create());
             }
-        } else if ("m3u".equals(kind)) importPlaylist(Uri.parse(item.optString("url")), java.util.Collections.emptyList(), java.util.Collections.emptyList(), null, item.optString("name"));
-        else {
-            String url = item.optString("url");
-            if (url.startsWith("nfs://") && url.endsWith("/")) { localParents.clear(); localTree = null; loadNfs(url, null); }
-            else { Entry entry = new Entry(item.optString("name"), url, false); setPlaylist(java.util.Collections.singletonList(entry), item.optString("name")); openVideo(entry); }
         }
     }
 
@@ -805,7 +810,7 @@ public final class MainActivity extends Activity {
         sourceTabs.clear(); moduleHeading=new LinearLayout(this);moduleHeading.setGravity(Gravity.CENTER_VERTICAL);
         Button back=button("返回",this::onBackPressed);sourceTabs.put(active,back);
         moduleHeading.addView(back,new LinearLayout.LayoutParams(-2,dp(52)));
-        String label="local".equals(active)?"本地存储":"nas".equals(active)?"SMB 网络":"m3u".equals(active)?"M3U / M3U8":"网络串流";
+        String label="local".equals(active)?"本地存储":"nas".equals(active)?"SMB 网络":"SMB 网络";
         if(browsing){if(playlistSource)label=playlistTitle;else if(currentUrl!=null){String known=folderLabels.get(currentUrl);if(known!=null)label=known;else {String path=Uri.parse(currentUrl).getPath();if(path!=null){path=path.replaceAll("/+$","");int split=Math.max(path.lastIndexOf('/'),path.lastIndexOf(':'));label=path.substring(split+1);}}}}
         TextView title=text(label,30);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(0,-2,1);titleParams.setMargins(dp(18),0,dp(20),0);moduleHeading.addView(title,titleParams);
@@ -971,7 +976,7 @@ public final class MainActivity extends Activity {
             localParents.push(currentUrl);
             loadLocal(entry.url, null, true);
         } else if (entry.folder) load(entry.url, null);
-        else if (!playlistSource && isPlaylist(entry.name)) importFolderPlaylist(entry);
+        
         else openVideo(entry);
     }
 
@@ -2051,7 +2056,7 @@ public final class MainActivity extends Activity {
                 case 2:showSubtitleSize();break;
                 case 3:showChoices("播放结束",new String[]{"顺序播放","单集循环","列表循环"},Math.floorMod(settings.getInt("loop",0),3),i->settings.edit().putInt("loop",i).apply());break;
                 case 4:showCompatibilitySettings();break;
-                case 5:showSettingsInfo("关于","smbplayer 0.28 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
+                case 5:showSettingsInfo("关于","smbplayer 0.29 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
                 default:break;
             }
         });
@@ -2678,11 +2683,11 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean isVideo(String name) {
-        return name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|m4v|mkv|webm|ts|m2ts|mov|avi|mpg|mpeg|3gp|wmv|flv|m3u8)$");
+        return name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|m4v|mkv|webm|ts|m2ts|mov|avi|mpg|mpeg|3gp|wmv|flv)$");
     }
 
     private static boolean isPlaylist(String name) {
-        return name.toLowerCase(Locale.ROOT).endsWith(".m3u");
+        return false;
     }
 
     private static boolean isSubtitle(String name) {
@@ -2721,8 +2726,7 @@ public final class MainActivity extends Activity {
                 if(item==null)item=new org.json.JSONObject().put("id",java.util.UUID.randomUUID().toString()).put("kind","local");
                 item.put("url",uri.toString()).put("name",documentName(uri));putHomeSource(item);showHome("local","");
             }catch(org.json.JSONException invalid){showHome("local","无法保存文件夹，请重试。");}
-        } else if (code == 11) {
-            importPlaylist(uri);
+
         } else if (code == 12 && playing) {
             int token = playbackRequest;
             CIFSContext context = connection;
@@ -2890,139 +2894,6 @@ public final class MainActivity extends Activity {
         return ("http".equals(scheme) || "https".equals(scheme) || "nfs".equals(scheme)
                 || "rtsp".equals(scheme) || "rtmp".equals(scheme) || "rtp".equals(scheme) || "udp".equals(scheme))
                 && uri.getHost() != null;
-    }
-
-    private void importFolderPlaylist(Entry playlist) {
-        List<Entry> siblings = entries;
-        List<Entry> subtitles = subtitlesInFolder;
-        Uri tree = localTree;
-        String folder = currentUrl;
-        java.util.ArrayDeque<String> parents = new java.util.ArrayDeque<>(localParents);
-        Runnable restore = () -> {
-            playlistSource = false;
-            entries = siblings;
-            subtitlesInFolder = subtitles;
-            localTree = tree;
-            localParents.clear();
-            localParents.addAll(parents);
-            currentUrl = folder;
-            focusedUrl = playlist.url;
-            renderBrowser("", true);
-        };
-        importPlaylist(Uri.parse(playlist.url), siblings, subtitles, restore, playlist.name);
-    }
-
-    private void importPlaylist(Uri uri) {
-        importPlaylist(uri, java.util.Collections.emptyList(), java.util.Collections.emptyList(), null, "网络播放列表");
-    }
-
-    private void importPlaylist(Uri uri, List<Entry> siblings, List<Entry> subtitles, Runnable restore, String title) {
-        int token = ++request;
-        CIFSContext context = connection;
-        renderBrowser("正在读取播放列表…", false);
-        network.execute(() -> {
-            List<Entry> items;
-            try {
-                if ("smb".equals(uri.getScheme())) {
-                    try (SmbFile file = new SmbFile(uri.toString(), context)) {
-                        long size = file.length();
-                        if (size < 0 || size > 2 * 1024 * 1024) throw new IOException("Playlist size limit");
-                        byte[] bytes = new byte[(int) size];
-                        try (java.io.DataInputStream input = new java.io.DataInputStream(file.openInputStream())) {
-                            input.readFully(bytes);
-                        }
-                        items = readPlaylist(new java.io.ByteArrayInputStream(bytes), siblings);
-                    }
-                } else if ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) {
-                    items = readLinkedPlaylist(uri, title);
-                } else {
-                    try (InputStream input = getContentResolver().openInputStream(uri)) {
-                        items = readPlaylist(input, siblings);
-                    }
-                }
-            } catch (Exception e) {
-                android.util.Log.w("SmbPlayer", "Playlist read failed", e);
-                ui.post(() -> {
-                    if (request != token) return;
-                    if (restore == null) showSetup("无法读取 M3U 文件。");
-                    else renderBrowser("无法读取 M3U 文件。", true);
-                });
-                return;
-            }
-            ui.post(() -> {
-                if (request != token) return;
-                if (items.isEmpty()) {
-                    if (restore == null) showSetup("M3U 中没有可播放的网络地址。");
-                    else renderBrowser("M3U 中没有可播放的同目录视频或网络地址。", true);
-                } else {
-                    returnFromPlaylist = restore;
-                    setPlaylist(items, title);
-                    subtitlesInFolder = subtitles;
-                }
-            });
-        });
-    }
-
-    private static List<Entry> readLinkedPlaylist(Uri uri, String title) throws IOException {
-        java.net.HttpURLConnection connection = (java.net.HttpURLConnection) new java.net.URL(uri.toString()).openConnection();
-        connection.setConnectTimeout(8000); connection.setReadTimeout(8000);
-        try {
-            try (InputStream input = connection.getInputStream(); java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream()) {
-                byte[] buffer = new byte[8192]; int count;
-                while ((count = input.read(buffer)) != -1) {
-                    if (bytes.size() + count > 2 * 1024 * 1024) throw new IOException("Playlist size limit");
-                    bytes.write(buffer, 0, count);
-                }
-                String content = new String(bytes.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
-                if (content.startsWith("\ufeff")) content = content.substring(1);
-                if (content.contains("#EXT-X-")) return java.util.Collections.singletonList(new Entry(title, uri.toString(), false));
-                StringBuilder resolved = new StringBuilder();
-                URI base = URI.create(connection.getURL().toString());
-                for (String line : content.split("\\r?\\n")) {
-                    String trimmed = line.trim();
-                    if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
-                        try { line = base.resolve(trimmed.replace(" ", "%20")).toString(); }
-                        catch (IllegalArgumentException invalid) { throw new IOException("Invalid playlist address", invalid); }
-                    }
-                    resolved.append(line).append('\n');
-                }
-                return readPlaylist(new java.io.ByteArrayInputStream(resolved.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)), java.util.Collections.emptyList());
-            }
-        } finally { connection.disconnect(); }
-    }
-
-    private static List<Entry> readPlaylist(InputStream input, List<Entry> siblings) throws IOException {
-        if (input == null) throw new IOException("Cannot open playlist");
-        java.util.Map<String, Entry> files = new java.util.HashMap<>();
-        for (Entry entry : siblings) {
-            if (!entry.folder && !isPlaylist(entry.name)) files.put(entry.name, entry);
-        }
-        List<Entry> items = new ArrayList<>();
-        java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(
-                input, java.nio.charset.StandardCharsets.UTF_8));
-        String line;
-        String name = null;
-        long length = 0;
-        for (int i = 0; i < 20000 && items.size() < 2000 && (line = reader.readLine()) != null; i++) {
-            line = line.trim();
-            if (line.startsWith("\ufeff")) line = line.substring(1);
-            if (line.startsWith("#EXTINF:") && line.indexOf(',') >= 0) {
-                int comma = line.indexOf(',');
-                name = line.substring(comma + 1);
-                try { length = Math.max(0, (long) (Double.parseDouble(line.substring(8, comma)) * 1000)); }
-                catch (NumberFormatException ignored) { length = 0; }
-            } else if (!line.isEmpty() && !line.startsWith("#")) {
-                String relative = line.startsWith("./") || line.startsWith(".\\") ? line.substring(2) : line;
-                Entry file = files.get(relative);
-                if (file != null) items.add(new Entry(file.name, file.url, false, file.modified,
-                        length > 0 ? length : file.duration, file.size));
-                else if (isNetworkMedia(line)) items.add(new Entry(name == null || name.isEmpty() ? line : name,
-                        line, false, 0, length));
-                name = null;
-                length = 0;
-            }
-        }
-        return items;
     }
 
     private void setPlaylist(List<Entry> items) {

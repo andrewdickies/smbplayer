@@ -1,6 +1,6 @@
 # smbplayer
 
-A simple Android TV video player built for a remote control. Supports SMB shares with custom ports, user-selected local / USB folders, M3U/M3U8 playlists and saved network streams. The UI is currently Chinese.
+A simple Android TV video player built for a remote control. Supports SMB shares with custom ports, user-selected local / USB folders, SMB video playback. The UI is currently Chinese.
 
 ## Requirements and installation
 
@@ -10,8 +10,8 @@ A simple Android TV video player built for a remote control. Supports SMB shares
 
 ## Features
 
-- Five home entries: local storage, SMB, M3U/M3U8, streams and settings.
-- Multiple saved sources; encrypted SMB passwords on the device; no automatic whole-device scan.
+- Two home cards: local storage and SMB. Settings are in the top-right corner. Up opens settings; down returns to a card.
+- M3U and network-stream modules have been removed. Existing local and SMB sources are preserved. Multiple saved sources; encrypted SMB passwords on the device; no automatic whole-device scan.
 - Remote focus navigation, large text, file size / modification time and sorting.
 - Playback controls: pause, playlist, aspect ratio, speed, subtitles, audio tracks, rotation / flip and sleep timer.
 - Independent SMB forward disk cache: up to 1 GiB, eight workers. For indexed media, target around 60 seconds and refill below 30 seconds; other formats use a byte estimate.

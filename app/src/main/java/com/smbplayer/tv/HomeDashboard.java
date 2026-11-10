@@ -17,10 +17,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.util.List;
 
-/** Bounded TV cards: five across when readable, otherwise two centered rows. */
+/** Bounded TV cards: centered horizontal entries, stacked on narrow screens. */
 final class HomeDashboard extends ViewGroup {
     private final List<Card> cards;
     private final int gap;
+    private int topFocusId;
+    void setTopFocusId(int id){topFocusId=id;}
     private int cardWidth,cardHeight,rows,firstCount,groupTop,viewportHeight;
 
     HomeDashboard(Context context,List<Card> cards) {
@@ -41,7 +43,7 @@ final class HomeDashboard extends ViewGroup {
         int width=MeasureSpec.getSize(widthSpec),available=Math.max(1,width-getPaddingLeft()-getPaddingRight());
         int minCard=dp(160);
         for(Card card:cards)minCard=Math.max(minCard,(int)Math.ceil(card.label.getPaint().measureText(card.label.getText().toString()))+dp(28));
-        firstCount=available>=cards.size()*minCard+(cards.size()-1)*gap?cards.size():3;
+        firstCount=available>=cards.size()*minCard+(cards.size()-1)*gap?cards.size():Math.max(1,(cards.size()+1)/2);
         rows=firstCount==cards.size()?1:2;
         cardWidth=Math.max(1,Math.min(dp(240),(available-(firstCount-1)*gap)/firstCount));
         cardHeight=rows==1?Math.max(dp(176),Math.min(dp(216),cardWidth))
@@ -61,7 +63,7 @@ final class HomeDashboard extends ViewGroup {
             Card card=cards.get(i);int row=i<firstCount?0:1,start=rowStart(row),end=start+rowCount(row)-1;
             card.setNextFocusLeftId(cards.get(Math.max(start,i-1)).getId());
             card.setNextFocusRightId(cards.get(Math.min(end,i+1)).getId());
-            card.setNextFocusUpId(row==0?card.getId():cards.get(nearest(i,0,available)).getId());
+            card.setNextFocusUpId(row==0?(topFocusId!=0?topFocusId:card.getId()):cards.get(nearest(i,0,available)).getId());
             card.setNextFocusDownId(row==rows-1?card.getId():cards.get(nearest(i,1,available)).getId());
         }
     }

@@ -2,7 +2,7 @@
 
 ## 界面与播放
 
-`MainActivity` 管理五个主页入口、来源管理、目录、遥控器焦点、播放浮层和生命周期；`HomeDashboard` 实现受尺寸约束的入口布局。`PlaybackPreferences` / `PlayerDefaults` 区分全局默认和当前播放状态；`SourceCredentials` 通过 Android Keystore 的 AES-GCM 密钥保护持久化 SMB 密码。
+`MainActivity` 管理本地 / SMB 两个主页入口及右上角设置、来源管理、目录、遥控器焦点、播放浮层和生命周期；`HomeDashboard` 实现受尺寸约束的入口布局。`PlaybackPreferences` / `PlayerDefaults` 区分全局默认和当前播放状态；`SourceCredentials` 通过 Android Keystore 的 AES-GCM 密钥保护持久化 SMB 密码。
 
 LibVLC 3.6.5 负责容器解复用、视频 / 音频解码、字幕、轨道和输出。项目通过 LibVLC API 使用引擎，没有复制官方 VLC Android 客户端的界面代码。
 
