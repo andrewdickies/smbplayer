@@ -86,6 +86,17 @@ public final class MainActivity extends Activity {
     private String browserActionFocus;
     private View pageRoot, pagePreferredFocus;
     private LinearLayout moduleHeading;
+    private PrivateLibrary privateLibrary;
+    private boolean privateMode, privateIndex;
+    private String privateFolderTarget, privateBoundary;
+    private boolean foreground;
+    private int pinEpoch;
+    private Entry privateFileTarget;
+    private int mediaFilter, pinFailures;
+    private long pinRetryAt;
+    private AlertDialog pinDialog;
+    private PhotoViewer photoViewer;
+    private MusicViewer musicViewer;
     private int playbackLoop=-1;
     private boolean dashboard;
     private String dashboardFocusKind = "local";
@@ -115,8 +126,12 @@ public final class MainActivity extends Activity {
         @Override public void onReceive(android.content.Context context, Intent intent) {
             String action = intent.getAction();
             if (Intent.ACTION_SCREEN_OFF.equals(action)) {
-                screenOff = true;
-                if (prepared) requestPause(true);
+                screenOff = true;pinEpoch++;
+                if(pinDialog!=null)pinDialog.dismiss();
+                if (privateMode) lockPrivate();
+                else if (musicViewer != null) musicViewer.pause();
+                else if (photoViewer != null) photoViewer.suspend();
+                else if (prepared) requestPause(true);
             } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
                 screenOff = false;
             } else if (Intent.ACTION_MEDIA_MOUNTED.equals(action)) {
@@ -206,7 +221,7 @@ public final class MainActivity extends Activity {
     private long seekPreviewUntil,seekPreviewOrigin;
     private final Runnable hideSeekPreview=()->{
         if(!seekPreviewShown)return;
-        if(buffering||pendingSeek>=0||videoRecovery.active()){ui.postDelayed(this.hideSeekPreview,250);return;}
+        if(buffering||pendingSeek>=0||videoRecovery.active()){seekPreviewUntil=android.os.SystemClock.uptimeMillis()+2000;ui.postDelayed(this.hideSeekPreview,250);return;}
         if(android.os.SystemClock.uptimeMillis()<seekPreviewUntil){ui.postDelayed(this.hideSeekPreview,250);return;}
         seekPreviewShown=false;if(!controlsShown&&controls!=null)controls.setVisibility(View.GONE);
     };
@@ -249,6 +264,8 @@ public final class MainActivity extends Activity {
         PlayerDefaults.migrate(defaults);
         settings = new PlaybackPreferences(defaults);
         history = getSharedPreferences("playback", MODE_PRIVATE);
+        privateLibrary = new PrivateLibrary(getSharedPreferences("privacy", MODE_PRIVATE));
+        mediaFilter = Math.max(0, Math.min(3, settings.getInt("mediaFilter", 0)));
         android.media.AudioManager audio=(android.media.AudioManager)getSystemService(AUDIO_SERVICE);
         if(audio!=null)audio.registerAudioDeviceCallback(audioRoutes,ui);
         mediaSession = new android.media.session.MediaSession(this, "SmbPlayer");
@@ -291,11 +308,11 @@ public final class MainActivity extends Activity {
         showDashboard();
     }
 
-    private int dp(int value) {
+    int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private TextView text(String value, int size) {
+    TextView text(String value, int size) {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(Math.max(20, size));
@@ -343,19 +360,31 @@ public final class MainActivity extends Activity {
         return view;
     }
 
-    private void setPlaybackButton(boolean active) {
-        pause.setText(active ? "暂停" : "继续");
-        setControlIcon(pause, active ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play);
+    Button iconButton(String icon, String label, Runnable action) {
+        Button result = button("", action);
+        result.setMinWidth(dp(52));
+        result.setGravity(Gravity.CENTER);
+        updateIcon(result, icon, label);
+        return result;
     }
 
-    private void setControlIcon(Button button, int id) {
-        android.graphics.drawable.Drawable icon = getDrawable(id).mutate();
-        icon.setBounds(0, 0, dp(24), dp(24));
-        icon.setTintList(new ColorStateList(
-                new int[][] {new int[] {-android.R.attr.state_enabled}, new int[] {}},
-                new int[] {0xff666666, Color.WHITE}));
-        button.setCompoundDrawablePadding(dp(4));
-        button.setCompoundDrawablesRelative(icon, null, null, null);
+    void updateIcon(Button button, String icon, String label) {
+        ActionIcon drawable = new ActionIcon(icon);
+        int width = dp(27);
+        drawable.setBounds(0, 0, width, width);
+        button.setCompoundDrawables(null, drawable, null, null);
+        button.setPadding(dp(9),dp(9),dp(9),dp(2));
+        button.setCompoundDrawablePadding(0);
+        button.setContentDescription(label);
+        if (android.os.Build.VERSION.SDK_INT >= 26) button.setTooltipText(label);
+        if (button.hasFocus()) button.setText(label);
+        button.setTextSize(13);
+        button.setIncludeFontPadding(false);
+        button.setOnFocusChangeListener((v,focused)->button.setText(focused?button.getContentDescription():""));
+    }
+
+    private void setPlaybackButton(boolean active) {
+        updateIcon(pause, active ? "pause" : "play", active ? "暂停" : "继续");
     }
 
     private android.graphics.drawable.LayerDrawable tvProgressTrack() {
@@ -400,6 +429,8 @@ public final class MainActivity extends Activity {
     private void showSetup(String message){showHome(homeKind(),message);}
 
     private void showDashboard() {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        privateMode=false;privateIndex=false;
         beginPage(); dashboard = true; settingsPage = false; settingsParents.clear(); settingsRenderer = null; ((PlaybackPreferences) settings).end();
         ++request; closeNfsBrowser(); browsing = false; playlistSource = false; nfsBrowsing = false;
         returnFromPlaylist = null;
@@ -451,14 +482,17 @@ public final class MainActivity extends Activity {
     }
 
     private void showHome(String kind,String message) {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        privateMode=false;privateIndex=false;privateFolderTarget=null;privateFileTarget=null;privateBoundary=null;
         beginPage();++request;closeNfsBrowser();sourceKind=kind;browsing=false;returnFromPlaylist=null;nfsBrowsing=false;playlistSource=false;
         localTree=null;localParents.clear();currentUrl=null;focusedUrl=null;entries=new ArrayList<>();subtitlesInFolder=new ArrayList<>();
         LinearLayout page=column();pageRoot=page;addSourceNavigation(page,kind);
         LinearLayout actions=new LinearLayout(this);
-        Button add=button("添加",()->{if("local".equals(kind))pickDocument(Intent.ACTION_OPEN_DOCUMENT_TREE,10);else editHomeSource(kind,null);});
-        add.setContentDescription("local".equals(kind)?"添加文件夹":"添加 SMB 服务器");actions.addView(add);moduleHeading.addView(actions);
+        Button add=iconButton("plus","添加",()->{if("local".equals(kind))pickDocument(Intent.ACTION_OPEN_DOCUMENT_TREE,10);else editHomeSource(kind,null);});
+        add.setContentDescription("local".equals(kind)?"添加文件夹":"添加 SMB 服务器");actions.addView(add);actions.addView(iconButton("lock","隐私列表",()->withPin(this::showPrivateIndex)));moduleHeading.addView(actions);
         org.json.JSONArray all=homeSources();List<org.json.JSONObject> items=new ArrayList<>();
-        for(int i=0;i<all.length();i++){org.json.JSONObject item=all.optJSONObject(i);if(item!=null&&kind.equals(item.optString("kind")))items.add(item);}
+        java.util.Set<String> marks=privateLibrary.marks();
+        for(int i=0;i<all.length();i++){org.json.JSONObject item=all.optJSONObject(i);if(item!=null&&kind.equals(item.optString("kind"))&&!privateLibrary.hidden(sourcePrivacyKey(item),marks))items.add(item);}
         TextView hint=text(message.isEmpty()?items.isEmpty()?"尚未添加"+("local".equals(kind)?"文件夹":"来源")+"，请选择右上角添加。":"已添加 "+items.size()+" 项 · 长按管理":message,20);hint.setTextColor(SECONDARY);hint.setPadding(0,0,0,dp(14));page.addView(hint);
         ScrollView scroll=new ScrollView(this);scroll.setFocusable(false);LinearLayout rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);scroll.addView(rows);page.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         List<Button> buttons=new ArrayList<>();View preferred=add;
@@ -545,6 +579,16 @@ public final class MainActivity extends Activity {
     }
 
     private void manageHomeSource(org.json.JSONObject item) {
+        showItems(item.optString("name"),new String[]{"移入隐私列表","管理来源"},choice->{
+            if(choice==0)withPin(()->{
+                markPrivate(sourcePrivacyKey(item), item.optString("name"), item.optString("url"), true, item.optString("id"));
+                showHome(item.optString("kind"),"已移入隐私列表");
+            });
+            else manageSourceSettings(item);
+        });
+    }
+
+    private void manageSourceSettings(org.json.JSONObject item) {
         if("local".equals(item.optString("kind"))) {showItems(item.optString("name"),new String[]{"移除文件夹"},index->removeSource(item));return;}
         showItems(item.optString("name"), new String[] {"编辑", "复制为新来源", "删除"}, choice -> {
             if (choice == 0) editHomeSource(item.optString("kind"), item);
@@ -760,6 +804,7 @@ public final class MainActivity extends Activity {
     }
 
     private void load(String url, String restoreFocus) {
+        if(!privateMode&&privateLibrary.hidden(PrivateLibrary.key(url),privateLibrary.marks())){showHome(sourceKind,"此目录已移入隐私列表");return;}
         int token = ++request;
         CIFSContext context = connection;
         browsing = true;
@@ -773,13 +818,13 @@ public final class MainActivity extends Activity {
                         String name = item.getName();
                         boolean folder = name.endsWith("/");
                         String urlForEntry = item.getURL().toExternalForm();
-                        if (folder || isVideo(name) || isPlaylist(name)) {
+                        if (folder || mediaType(name)>0) {
                             long modified = 0;
                             try { modified = item.lastModified(); } catch (jcifs.CIFSException ignored) {}
                             long bytes = -1;
                             if (!folder) try { bytes = item.length(); } catch (jcifs.CIFSException ignored) {}
                             result.add(new Entry(name, urlForEntry, folder, modified, 0, bytes));
-                        } else if (isSubtitle(name)) subtitles.add(new Entry(name, urlForEntry, false));
+                        } else if (isSubtitle(name)||isLyrics(name)) subtitles.add(new Entry(name, urlForEntry, false));
                     }
                 }
                 sortEntries(result);
@@ -817,10 +862,11 @@ public final class MainActivity extends Activity {
 
     private void addSourceNavigation(LinearLayout page,String active) {
         sourceTabs.clear(); moduleHeading=new LinearLayout(this);moduleHeading.setGravity(Gravity.CENTER_VERTICAL);
-        Button back=button("返回",this::onBackPressed);sourceTabs.put(active,back);
+        Button back=iconButton("back","返回",this::onBackPressed);sourceTabs.put(active,back);
         moduleHeading.addView(back,new LinearLayout.LayoutParams(-2,dp(52)));
         String label="local".equals(active)?"本地存储":"nas".equals(active)?"SMB 网络":"SMB 网络";
         if(browsing){if(playlistSource)label=playlistTitle;else if(currentUrl!=null){String known=folderLabels.get(currentUrl);if(known!=null)label=known;else {String path=Uri.parse(currentUrl).getPath();if(path!=null){path=path.replaceAll("/+$","");int split=Math.max(path.lastIndexOf('/'),path.lastIndexOf(':'));label=path.substring(split+1);}}}}
+        if(privateMode)label=privateIndex?"隐私列表":"私密目录";
         TextView title=text(label,30);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(0,-2,1);titleParams.setMargins(dp(18),0,dp(20),0);moduleHeading.addView(title,titleParams);
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(14);page.addView(moduleHeading,lp);
@@ -834,6 +880,7 @@ public final class MainActivity extends Activity {
 
     private List<View> interactiveChildren(android.view.ViewGroup group) {
         List<View> result = new ArrayList<>();
+        if(group==null)return result;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
             if (child instanceof Button && child.isEnabled() && child.getVisibility() == View.VISIBLE) result.add(child);
@@ -858,7 +905,7 @@ public final class MainActivity extends Activity {
     }
 
     private void repairMainFocus() {
-        if (buildingPage || playbackDialog != null || playing && !controlsShown) return;
+        if (photoViewer!=null || musicViewer!=null || buildingPage || playbackDialog != null || playing && !controlsShown) return;
         View focus = getCurrentFocus();
         if (!interactiveFocus(focus)) {
             View fallback = playing ? pause : pagePreferredFocus;
@@ -878,8 +925,10 @@ public final class MainActivity extends Activity {
         LinearLayout page=column();pageRoot=page;addSourceNavigation(page,sourceKind);
         LinearLayout actions=new LinearLayout(this);moduleHeading.addView(actions);
         if(showEntries) {
-            Button sort=button("排序",this::showBrowserSort);sort.setTag("sort");actions.addView(sort);
-            Button view=button("视图",()->showChoices("视图",new String[]{"列表","网格"},settings.getBoolean("gridView",false)?1:0,i->{rememberBrowserScroll();settings.edit().putBoolean("gridView",i==1).apply();browserActionFocus="view";renderBrowser("",true);}));view.setTag("view");actions.addView(view);
+            actions.addView(iconButton("filter","筛选媒体",this::chooseMediaFilter));
+            if(!privateMode)actions.addView(iconButton("lock","隐私列表",()->withPin(this::showPrivateIndex)));
+            Button sort=iconButton("sort","排序",this::showBrowserSort);sort.setTag("sort");actions.addView(sort);
+            Button view=iconButton("grid","视图",()->showChoices("视图",new String[]{"列表","网格"},settings.getBoolean("gridView",false)?1:0,i->{rememberBrowserScroll();settings.edit().putBoolean("gridView",i==1).apply();browserActionFocus="view";renderBrowser("",true);}));view.setTag("view");actions.addView(view);
         }
         spaceActions(actions);
         String path=browserLocation();
@@ -889,8 +938,9 @@ public final class MainActivity extends Activity {
         if(!showEntries) {
             android.widget.ProgressBar loading=new android.widget.ProgressBar(this);loading.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));page.addView(loading,new LinearLayout.LayoutParams(dp(48),dp(48)));finishPage(sourceTabs.get(sourceKind),actions);return;
         }
-        if(entries.isEmpty()){finishPage(actions.getChildAt(0),actions);return;}
-        if(settings.getBoolean("gridView",false))showGrid(page,actions);else showFileList(page,actions);
+        if(handlePrivateTarget())return;
+        if(visibleEntries().isEmpty()){page.addView(text("此筛选下没有可显示的媒体",20));finishPage(actions.getChildAt(0),actions);return;}
+        if(mediaFilter==1||settings.getBoolean("gridView",false))showGrid(page,actions);else showFileList(page,actions);
     }
 
     private String browserLocation(){
@@ -922,7 +972,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showFileList(LinearLayout page, LinearLayout actions) {
-        List<Entry> items = new ArrayList<>(entries);
+        List<Entry> items = visibleEntries();
         android.widget.ListView list = new android.widget.ListView(this);
         fileView=list;
         list.setFocusableInTouchMode(true);
@@ -945,6 +995,7 @@ public final class MainActivity extends Activity {
         page.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
         final int[] selected = {0};
         list.setOnItemClickListener((parent, view, position, id) -> openEntry(items.get(position)));
+        list.setOnItemLongClickListener((parent,view,position,id)->{manageEntry(items.get(position));return true;});
         list.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
                 selected[0] = position;
@@ -978,6 +1029,18 @@ public final class MainActivity extends Activity {
         rememberBrowserScroll();
         focusedUrl = entry.url;
         if(entry.folder)folderLabels.put(entry.url,entry.name);
+        if(!entry.folder && mediaType(entry.name)>=2){
+            previewsPaused=true;metadataGeneration++;
+            List<Entry> queue=new ArrayList<>();
+            int type=mediaType(entry.name);
+            for(Entry candidate:visibleEntries())if(!candidate.folder&&mediaType(candidate.name)==type)queue.add(candidate);
+            int index=0;while(index<queue.size()&&!queue.get(index).url.equals(entry.url))index++;
+            if(index==queue.size()){queue.clear();queue.add(entry);index=0;}
+            if(type==2)photoViewer=new PhotoViewer(this,queue,index);
+            else musicViewer=new MusicViewer(this,queue,new ArrayList<>(subtitlesInFolder),index);
+            return;
+        }
+
         if (entry.folder && nfsBrowsing) {
             localParents.push(currentUrl);
             loadNfs(entry.url, null);
@@ -1000,7 +1063,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showGrid(LinearLayout page, LinearLayout actions) {
-        List<Entry> items = new ArrayList<>(entries);
+        List<Entry> items = visibleEntries();
         android.widget.GridView grid = new android.widget.GridView(this);
         fileView=grid;
         grid.setId(View.generateViewId());
@@ -1025,6 +1088,7 @@ public final class MainActivity extends Activity {
         });
         page.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
         grid.setOnItemClickListener((parent, view, position, id) -> openEntry(items.get(position)));
+        grid.setOnItemLongClickListener((parent,view,position,id)->{manageEntry(items.get(position));return true;});
         final int[] selected = {0};
         grid.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
@@ -1138,9 +1202,30 @@ public final class MainActivity extends Activity {
                     : FileDisplay.modified(entry.modified) + "\n" + FileDisplay.size(entry.size));
             fileDetails.setContentDescription("修改时间：" + FileDisplay.modified(entry.modified) + "；文件大小：" + FileDisplay.size(entry.size));
             duration.setText(entry.folder ? "目录" : isPlaylist(entry.name) && !playlistSource ? "播放列表"
-                    : entry.duration > 0 ? time(entry.duration) : "视频");
+                    : entry.duration > 0 ? time(entry.duration) : mediaType(entry.name)==2?"图片":mediaType(entry.name)==3?"音乐":"视频");
             image.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
             image.setImageResource(R.drawable.ic_stream);
+            int kind=mediaType(entry.name);
+            if(!entry.folder && kind>=2){
+                image.setImageDrawable(new ActionIcon(kind==2?"photo":"music"));
+                if(kind==2 && !previewsPaused){
+                    Preview cached=previewCache.get(entry.url);
+                    if(cached!=null){applyPreview(cached);return;}
+                    int token=metadataGeneration;
+                    previews.execute(()->{
+                        if(previewsPaused||token!=metadataGeneration||!entry.url.equals(boundUrl))return;
+                        try{
+                            Preview ready=new Preview(PhotoViewer.decode(MainActivity.this,entry,240,160),0);
+                            ui.post(()->{
+                                if(token==metadataGeneration&&entry.url.equals(boundUrl)){
+                                    previewCache.put(entry.url,ready);applyPreview(ready);
+                                }
+                            });
+                        }catch(IOException|RuntimeException|OutOfMemoryError ignored){}
+                    });
+                }
+                return;
+            }
             CIFSContext previewContext = previewContextFor(entry);
             if (entry.folder || isPlaylist(entry.name) && !playlistSource
                     || (!entry.url.startsWith("content://") && previewContext == null)) return;
@@ -1170,8 +1255,7 @@ public final class MainActivity extends Activity {
                 image.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
                 image.setImageBitmap(preview.image);
             }
-            String info = preview.duration > 0 ? time(preview.duration) : "视频";
-            duration.setText(info);
+            if (preview.duration > 0) duration.setText(time(preview.duration));
         }
     }
 
@@ -1211,6 +1295,7 @@ public final class MainActivity extends Activity {
     }
 
     private void up() {
+        if(privateMode&&(privateFileTarget!=null||currentUrl==null||currentUrl.equals(privateBoundary)||currentUrl.equals(rootUrl)||localTree!=null&&localParents.isEmpty())){showPrivateIndex();return;}
         if (returnFromPlaylist != null) {
             Runnable restore = returnFromPlaylist;
             returnFromPlaylist = null;
@@ -1262,6 +1347,7 @@ public final class MainActivity extends Activity {
         SmbPreviewSource preview = activePreviewSource;
         if (preview != null) preview.cancel();
         publishMediaState(android.media.session.PlaybackState.STATE_BUFFERING);
+        mediaSession.setMetadata(new android.media.MediaMetadata.Builder().putString(android.media.MediaMetadata.METADATA_KEY_TITLE,privateMode?"私密播放":entry.name).build());
         mediaSession.setActive(true);
         int token = ++playbackRequest;
         playingEntry = entry;
@@ -1278,7 +1364,7 @@ public final class MainActivity extends Activity {
         VLCVideoLayout video = new VLCVideoLayout(this);
         videoLayout = video;
         frame.addView(video, new FrameLayout.LayoutParams(-1, -1));
-        video.setOnClickListener(v -> { exitPromptAt = 0; if (controlsShown) { ui.removeCallbacks(hideControls); hideControls.run(); } else { showControls(); pause.requestFocusFromTouch(); } });
+        installVideoGestures(video);
         video.setFocusable(false);
         video.setDescendantFocusability(android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         controls = column();
@@ -1296,7 +1382,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout.LayoutParams titleSpace = new LinearLayout.LayoutParams(0, -2, 1);
         titleSpace.setMargins(dp(16), 0, 0, 0);
-        playerBack = button("返回", () -> leaveVideo(""));
+        playerBack = iconButton("back","返回", () -> leaveVideo(""));
         header.addView(playerBack);
         header.addView(title, titleSpace);
         frame.addView(header, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
@@ -1413,16 +1499,16 @@ public final class MainActivity extends Activity {
         android.widget.HorizontalScrollView controlScroll = new android.widget.HorizontalScrollView(this);
         controlScroll.setFocusable(false); controlScroll.setHorizontalScrollBarEnabled(false);
         controlScroll.addView(row); controls.addView(controlScroll);
-        pause = button("暂停", this::togglePlayback);
+        pause = iconButton("pause","暂停", this::togglePlayback);
         setPlaybackButton(true);
-        playlist = button("选集", this::showPlaylist);
-        more = button("更多", this::showPlaybackOptions);
-        aspectButton = button("比例", this::showAspectOptions);
+        playlist = iconButton("list","选集", this::showPlaylist);
+        more = iconButton("more","更多", this::showPlaybackOptions);
+        aspectButton = iconButton("fit","比例", this::showAspectOptions);
         speedButton = button(speedLabel(), this::showSpeed);
         for (Button action : new Button[] {pause, playlist, aspectButton, speedButton, more}) {
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(Math.max(dp(80), (getResources().getDisplayMetrics().widthPixels - dp(88)) / 5), dp(54));
             params.setMargins(dp(4), dp(2), dp(4), 0);
-            action.setTextSize(20); action.setPadding(dp(4), dp(4), dp(4), dp(4));
+            if(action==speedButton){action.setTextSize(20);action.setPadding(dp(4),dp(4),dp(4),dp(4));}
             row.addView(action, params);
         }
         frame.addView(controls, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
@@ -1862,7 +1948,7 @@ public final class MainActivity extends Activity {
 
     private List<Entry> videoEntries() {
         List<Entry> videos=new ArrayList<>();
-        for(Entry entry:entries)if(!entry.folder && (playlistSource || !isPlaylist(entry.name)))videos.add(entry);
+        for(Entry entry:visibleEntries())if(!entry.folder && mediaType(entry.name)==1)videos.add(entry);
         return videos;
     }
 
@@ -2065,7 +2151,7 @@ public final class MainActivity extends Activity {
                 case 2:showSubtitleSize();break;
                 case 3:showChoices("播放结束",new String[]{"顺序播放","单集循环","列表循环"},Math.floorMod(settings.getInt("loop",0),3),i->settings.edit().putInt("loop",i).apply());break;
                 case 4:showCompatibilitySettings();break;
-                case 5:showSettingsInfo("关于","smbplayer 0.30 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
+                case 5:showSettingsInfo("关于","smbplayer 1.0.0 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
                 default:break;
             }
         });
@@ -2146,7 +2232,7 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void showItems(String title, String[] labels, java.util.function.IntConsumer action) {
+    void showItems(String title, String[] labels, java.util.function.IntConsumer action) {
         if (settingsPage && !playing) { showSettingsList(title,labels,-1,action,false); return; }
         showPlaybackDialog(new AlertDialog.Builder(this).setTitle(title)
                 .setItems(labels, (dialog, index) -> action.accept(index)).create());
@@ -2423,6 +2509,60 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void installVideoGestures(View video){
+        android.view.GestureDetector taps=new android.view.GestureDetector(this,new android.view.GestureDetector.SimpleOnGestureListener(){
+            @Override public boolean onDown(android.view.MotionEvent e){return true;}
+            @Override public boolean onSingleTapConfirmed(android.view.MotionEvent e){
+                if(!playing || playbackDialog!=null || !video.isAttachedToWindow())return false;
+                exitPromptAt=0;
+                if(controlsShown){ui.removeCallbacks(hideControls);hideControls.run();}
+                else showControls();
+                return true;
+            }
+            @Override public boolean onDoubleTap(android.view.MotionEvent e){
+                if(!playing || playbackDialog!=null || !video.isAttachedToWindow())return false;
+                int delta=e.getX()<video.getWidth()/2f?-seekStep():seekStep();
+                seek(delta,controlsShown);
+                return true;
+            }
+        });
+        video.setOnTouchListener(new View.OnTouchListener(){
+            float downX,downY;
+            boolean sliding;
+            long origin,target;
+            @Override public boolean onTouch(View view,android.view.MotionEvent event){
+                int action=event.getActionMasked();
+                if(action==android.view.MotionEvent.ACTION_DOWN){downX=event.getX();downY=event.getY();sliding=false;}
+                if(action==android.view.MotionEvent.ACTION_MOVE&&prepared&&player!=null&&player.isSeekable()&&player.getLength()>0){
+                    float dx=event.getX()-downX,dy=event.getY()-downY;
+                    if(!sliding&&Math.abs(dx)>dp(18)&&Math.abs(dx)>Math.abs(dy)*1.4f){
+                        sliding=true;dragging=true;origin=pendingSeek>=0?pendingSeek:player.getTime();
+                        ui.removeCallbacks(applySeek);pendingSeek=-1;
+                        android.view.MotionEvent cancel=android.view.MotionEvent.obtain(event);
+                        cancel.setAction(android.view.MotionEvent.ACTION_CANCEL);taps.onTouchEvent(cancel);cancel.recycle();
+                    }
+                    if(sliding){
+                        long duration=player.getLength();
+                        target=Math.max(0,Math.min(duration-1,origin+Math.round(dx/Math.max(1f,view.getWidth())*Math.min(duration,300000L))));
+                        if(!controlsShown){showSeekPreview(origin);seekPreviewOrigin=origin;}
+                        else{ui.removeCallbacks(hideControls);flashNotice("定位 "+time(target));}
+                        updateTimeline(target);
+                        return true;
+                    }
+                }
+                if(sliding&&(action==android.view.MotionEvent.ACTION_UP||action==android.view.MotionEvent.ACTION_CANCEL)){
+                    sliding=false;dragging=false;
+                    if(prepared&&player!=null){
+                        if(action==android.view.MotionEvent.ACTION_UP)performSeek(target);
+                        else updateTimeline(player.getTime());
+                    }
+                    return true;
+                }
+                return taps.onTouchEvent(event);
+            }
+        });
+    }
+
     private void showSeekPreview(long origin){
         if(!seekPreviewShown)seekPreviewOrigin=origin;
         seekPreviewShown=true;seekPreviewUntil=android.os.SystemClock.uptimeMillis()+2000;
@@ -2502,6 +2642,7 @@ public final class MainActivity extends Activity {
     private void stopVideo() {
         ++playbackRequest;
         mediaSession.setActive(false);
+        mediaSession.setMetadata(null);
         savePlayback();
         videoKey = null;
         playingEntry = null;
@@ -2577,11 +2718,16 @@ public final class MainActivity extends Activity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if(playbackDialog==null && (photoViewer!=null && photoViewer.key(event) || musicViewer!=null && musicViewer.key(event)))return true;
         int key = event.getKeyCode();
         boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
         boolean first = event.getRepeatCount() == 0;
         boolean direction = key >= KeyEvent.KEYCODE_DPAD_UP && key <= KeyEvent.KEYCODE_DPAD_RIGHT;
         if (!playing) {
+            if(playbackDialog==null&&browsing&&fileView!=null&&fileView.hasFocus()&&key==KeyEvent.KEYCODE_MENU){
+                if(down&&first&&fileView.getSelectedItem() instanceof Entry)manageEntry((Entry)fileView.getSelectedItem());
+                return true;
+            }
             if (down && direction) repairMainFocus();
             boolean handled = super.dispatchKeyEvent(event);
             if (down && direction) ui.post(this::repairMainFocus);
@@ -2663,7 +2809,11 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if(photoViewer!=null){if(!photoViewer.back())closeMediaViewer();return;}
+        if(musicViewer!=null){closeMediaViewer();return;}
+        if(privateIndex){lockPrivate();return;}
         if (playing) {
+            if (seekPreviewShown) { hideControls.run(); return; }
             if (controlsShown) {
                 ui.removeCallbacks(hideControls);
                 hideControls.run();
@@ -2679,12 +2829,19 @@ public final class MainActivity extends Activity {
         else super.onBackPressed();
     }
 
+    @Override protected void onStart(){super.onStart();foreground=true;}
+
     @Override protected void onStop() {
         super.onStop();
+        foreground=false;pinEpoch++;
+        if(pinDialog!=null)pinDialog.dismiss();
+        if(privateMode){lockPrivate();return;}
+        if(photoViewer!=null||musicViewer!=null)closeMediaViewer();
         if (playing && !screenOff && !pickingSubtitle) leaveVideo("");
     }
 
     @Override protected void onDestroy() {
+        releaseMediaViewers();
         ++request;
         closeNfsBrowser();
         ui.removeCallbacks(sleepPlayback);
@@ -2702,6 +2859,473 @@ public final class MainActivity extends Activity {
         super.onDestroy();
     }
 
+    android.content.SharedPreferences mediaSettings() { return settings; }
+
+    private static int mediaType(String name) {
+        int dot=name.lastIndexOf('.');
+        String extension=dot<0?"":name.substring(dot+1).toLowerCase(Locale.ROOT);
+        switch(extension){
+            case "jpg":case "jpeg":case "png":case "webp":case "bmp":case "gif":case "heic":case "heif":return 2;
+            case "flac":case "ape":case "mp3":case "aac":case "m4a":case "wav":case "ogg":case "opus":case "alac":case "aiff":case "wma":return 3;
+            default:return isVideo(name)?1:0;
+        }
+    }
+
+    private static boolean isLyrics(String name){return name.toLowerCase(Locale.ROOT).endsWith(".lrc");}
+
+    private void chooseMediaFilter(){
+        showChoices("显示媒体",new String[]{"视频","图片","音乐","全部"},mediaFilter,i->{
+            mediaFilter=i;
+            settings.edit().putInt("mediaFilter",i).apply();
+            renderBrowser("",true);
+        });
+    }
+
+    private List<Entry> visibleEntries(){
+        java.util.Set<String> marks=privateLibrary.marks();
+        List<Entry> visible=new ArrayList<>();
+        for(Entry entry:entries){
+            if(privateFileTarget!=null&&!entry.url.equals(privateFileTarget.url))continue;
+            if(!privateMode&&privateLibrary.hidden(PrivateLibrary.key(entry.url),marks))continue;
+            int type=mediaType(entry.name);
+            if(entry.folder||privateFileTarget==entry||mediaFilter==3||type==mediaFilter+1)visible.add(entry);
+        }
+        return visible;
+    }
+
+    InputStream openAuxiliary(Entry entry)throws IOException{
+        if(!entry.url.startsWith("smb://")){
+            InputStream input=getContentResolver().openInputStream(Uri.parse(entry.url));
+            if(input==null)throw new IOException("Document unavailable");
+            return input;
+        }
+        CIFSContext context=connection;
+        if(context==null)throw new IOException("SMB unavailable");
+        SmbFile file=new SmbFile(entry.url,context);
+        try{
+            return new java.io.FilterInputStream(file.openInputStream()){
+                @Override public void close()throws IOException{try{super.close();}finally{file.close();}}
+            };
+        }catch(IOException|RuntimeException error){file.close();throw error;}
+    }
+
+    SmbPlaybackServer musicBridge(Entry song)throws IOException{
+        CIFSContext context=connection;
+        if(context==null)throw new IOException("SMB unavailable");
+        return new SmbPlaybackServer(song.url,context,getCacheDir());
+    }
+
+    void closeMusicBridge(SmbPlaybackServer bridge){
+        if(!network.isShutdown())network.execute(bridge::stop);else bridge.stop();
+    }
+
+    private void releaseMediaViewers(){
+        if(photoViewer!=null){photoViewer.close();photoViewer=null;}
+        if(musicViewer!=null){musicViewer.close();musicViewer=null;}
+    }
+
+    void closeMediaViewer(){
+        focusedUrl=photoViewer!=null?photoViewer.currentUrl():musicViewer!=null?musicViewer.currentUrl():focusedUrl;
+        releaseMediaViewers();
+        renderBrowser("",true);
+    }
+
+    private android.content.SharedPreferences privacyPrefs(){return getSharedPreferences("privacy",MODE_PRIVATE);}
+
+    private String sourcePrivacyKey(org.json.JSONObject item){
+        if("local".equals(item.optString("kind")))return PrivateLibrary.key(item.optString("url"));
+        String host=item.optString("host").toLowerCase(Locale.ROOT);
+        String port=item.optString("port","445");
+        return PrivateLibrary.key("smb://"+host+":"+(port.isEmpty()?"445":port)+"/"+item.optString("share"));
+    }
+
+    private void withPin(Runnable granted){
+        if(privateMode){granted.run();return;}
+        if(android.os.SystemClock.elapsedRealtime()<pinRetryAt){
+            android.widget.Toast.makeText(this,"请稍后再试",android.widget.Toast.LENGTH_SHORT).show();return;
+        }
+        promptPin(privateLibrary.hasPin()?"解锁隐私列表":"设置 6 位 PIN",first->{
+            if(privateLibrary.hasPin())checkPin(first,false,granted);
+            else promptPin("再次输入 PIN",second->{
+                if(first.equals(second))checkPin(second,true,granted);
+                else android.widget.Toast.makeText(this,"两次输入不一致",android.widget.Toast.LENGTH_SHORT).show();
+            });
+        });
+    }
+
+    private void checkPin(String pin,boolean create,Runnable granted){
+        int token=request,epoch=pinEpoch;
+        network.execute(()->{
+            boolean success=false;
+            try{success=(!create||!privateLibrary.hasPin())&&privateLibrary.verify(pin,create);}catch(Exception ignored){}
+            boolean verified=success;
+            ui.post(()->{
+                if(token!=request||epoch!=pinEpoch||!foreground||isFinishing()||isDestroyed()||screenOff)return;
+                if(verified){pinFailures=0;granted.run();}
+                else{
+                    if(++pinFailures>=5){pinRetryAt=android.os.SystemClock.elapsedRealtime()+30000;pinFailures=0;}
+                    android.widget.Toast.makeText(this,"PIN 验证失败",android.widget.Toast.LENGTH_SHORT).show();
+                }
+            });
+        });
+    }
+
+    private void promptPin(String title,java.util.function.Consumer<String> result){
+        LinearLayout pad=new LinearLayout(this);pad.setOrientation(LinearLayout.VERTICAL);
+        pad.setPadding(dp(16),dp(6),dp(16),dp(12));
+        TextView dots=text("○ ○ ○ ○ ○ ○",24);dots.setGravity(Gravity.CENTER);pad.addView(dots);
+        StringBuilder pin=new StringBuilder();
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(pad).setNegativeButton("取消",null).create();
+        String[] keys={"1","2","3","4","5","6","7","8","9","⌫","0","确定"};
+        Button[] buttons=new Button[keys.length];
+        for(int row=0;row<2;row++){
+            LinearLayout line=new LinearLayout(this);pad.addView(line);
+            for(int col=0;col<6;col++){
+                String value=keys[row*6+col];
+                Button key=button(value,()->{
+                    if("确定".equals(value)){
+                        if(pin.length()==6){String entered=pin.toString();dialog.dismiss();result.accept(entered);}
+                        return;
+                    }
+                    if("⌫".equals(value)){if(pin.length()>0)pin.setLength(pin.length()-1);}
+                    else if(pin.length()<6)pin.append(value);
+                    StringBuilder masked=new StringBuilder();
+                    for(int i=0;i<6;i++)masked.append(i<pin.length()?"● ":"○ ");
+                    dots.setText(masked.toString().trim());
+                });
+                key.setMinWidth(0);key.setPadding(0,0,0,0);key.setTextSize(20);
+                buttons[row*6+col]=key;line.addView(key,new LinearLayout.LayoutParams(0,dp(52),1));
+            }
+        }
+        dialog.setOnKeyListener((d,key,event)->{
+            if(event.getAction()!=KeyEvent.ACTION_DOWN)return false;
+            if(key>=KeyEvent.KEYCODE_0&&key<=KeyEvent.KEYCODE_9){
+                String digit=String.valueOf(key-KeyEvent.KEYCODE_0);
+                for(int i=0;i<keys.length;i++)if(digit.equals(keys[i]))buttons[i].performClick();
+                return true;
+            }
+            return false;
+        });
+        pinDialog=dialog;
+        showPlaybackDialog(dialog);
+        if(dialog.getWindow()!=null)dialog.getWindow().setLayout(Math.min(dp(620),getResources().getDisplayMetrics().widthPixels-dp(28)),-2);
+        buttons[0].requestFocusFromTouch();
+    }
+
+    private org.json.JSONArray privateRecords(){
+        try{return new org.json.JSONArray(privacyPrefs().getString("records","[]"));}
+        catch(org.json.JSONException ignored){return new org.json.JSONArray();}
+    }
+
+    private void markPrivate(String key,String name,String url,boolean folder,String sourceId){
+        try{
+            org.json.JSONObject record=new org.json.JSONObject().put("key",key).put("name",name)
+                    .put("url",url).put("folder",folder).put("kind",sourceKind)
+                    .put("parent",currentUrl==null?"":currentUrl).put("source",sourceId==null?"":sourceId);
+            org.json.JSONArray records=privateRecords();records.put(record);
+            if(!privateLibrary.marks().contains(key))privateLibrary.toggle(key);
+            privacyPrefs().edit().putString("records",records.toString()).apply();
+            clearMediaPreviews();
+        }catch(org.json.JSONException ignored){}
+    }
+
+    private void clearMediaPreviews(){
+        metadataGeneration++;
+        previewCache.evictAll();
+        ((java.util.concurrent.ThreadPoolExecutor)previews).getQueue().clear();
+        if(activePreviewSource!=null)activePreviewSource.cancel();
+    }
+
+    private void showPrivateIndex(){
+        beginPage();++request;privateMode=true;privateIndex=true;privateFolderTarget=null;privateFileTarget=null;privateBoundary=null;
+        browsing=false;localTree=null;localParents.clear();currentUrl=null;
+        clearMediaPreviews();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        LinearLayout page=column();pageRoot=page;addSourceNavigation(page,sourceKind);
+        LinearLayout actions=new LinearLayout(this);
+        if(privateRecords().length()==0 && privateLibrary.marks().isEmpty()){
+            actions.addView(iconButton("more","清除 PIN",()->{
+                AlertDialog dialog=new AlertDialog.Builder(this).setTitle("清除隐私 PIN？")
+                        .setMessage("下次使用隐私列表时可以设置新的 PIN。")
+                        .setNegativeButton("取消",null).setPositiveButton("清除",(d,w)->{
+                            privacyPrefs().edit().remove("pin").remove("salt").apply();
+                            lockPrivate();
+                        }).create();
+                showPlaybackDialog(dialog);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocusFromTouch();
+            }));
+        }
+        moduleHeading.addView(actions);
+        ScrollView scroll=new ScrollView(this);LinearLayout rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(rows);page.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        View preferred=sourceTabs.get(sourceKind);
+        org.json.JSONArray records=privateRecords();
+        for(int i=0;i<records.length();i++){
+            org.json.JSONObject record=records.optJSONObject(i);
+            if(record==null||!sourceKind.equals(record.optString("kind")))continue;
+            Button row=button(record.optString("name"),()->openPrivateRecord(record));
+            row.setOnLongClickListener(v->{showItems(record.optString("name"),new String[]{"恢复到普通列表"},choice->{
+                removePrivacyRecords(record.optString("key"),false);
+                showPrivateIndex();
+            });return true;});
+            row.setOnKeyListener((v,key,event)->{
+                if(event.getAction()==KeyEvent.ACTION_DOWN&&(key==KeyEvent.KEYCODE_MENU
+                        || event.getRepeatCount()==1&&(key==KeyEvent.KEYCODE_DPAD_CENTER||key==KeyEvent.KEYCODE_ENTER))){
+                    v.setPressed(false);v.performLongClick();return true;
+                }
+                return false;
+            });
+            rows.addView(row,new LinearLayout.LayoutParams(-1,dp(62)));
+            if(rows.getChildCount()==1)preferred=row;
+        }
+        if(rows.getChildCount()==0)rows.addView(text("隐私列表为空",22));
+        setContentView(page);finishPage(preferred,actions);
+    }
+
+    private void openPrivateRecord(org.json.JSONObject record){
+        org.json.JSONObject source=null;
+        org.json.JSONArray all=homeSources();
+        for(int i=0;i<all.length();i++){
+            org.json.JSONObject item=all.optJSONObject(i);
+            if(item!=null&&record.optString("source").equals(item.optString("id"))){source=item;break;}
+        }
+        if(source==null){android.widget.Toast.makeText(this,"原来源已移除，请重新添加",android.widget.Toast.LENGTH_SHORT).show();return;}
+        privateIndex=false;
+        if(!record.optString("parent").isEmpty()){
+            privateFolderTarget=record.optBoolean("folder")?record.optString("url"):record.optString("parent");
+            if(!record.optBoolean("folder"))privateFileTarget=new Entry(record.optString("name"),record.optString("url"),false);
+        }
+        openHomeSource(source);
+    }
+
+    private boolean handlePrivateTarget(){
+        if(!privateMode||privateFolderTarget==null||currentUrl==null)return false;
+        String target=privateFolderTarget;
+        privateBoundary=target;
+        privateFolderTarget=null;
+        if(!currentUrl.equals(target)){
+            if(localTree!=null)loadLocal(target,null,false);else load(target,null);
+            return true;
+        }
+        if(privateFileTarget!=null){
+            String url=privateFileTarget.url;
+            for(Entry entry:entries)if(entry.url.equals(url)){
+                entries=new ArrayList<>(java.util.Collections.singletonList(entry));
+                privateFileTarget=entry;
+                break;
+            }
+        }
+        return false;
+    }
+
+    private void removePrivacyRecords(String root,boolean children){
+        org.json.JSONArray all=privateRecords(),kept=new org.json.JSONArray();
+        for(int i=0;i<all.length();i++){
+            org.json.JSONObject record=all.optJSONObject(i);
+            if(record==null)continue;
+            String key=record.optString("key");
+            if(!(children?PrivateLibrary.under(key,root):key.equals(root)))kept.put(record);
+        }
+        if(children)privateLibrary.remap(root,null);
+        else if(privateLibrary.marks().contains(root))privateLibrary.toggle(root);
+        privacyPrefs().edit().putString("records",kept.toString()).apply();
+        clearMediaPreviews();
+    }
+
+    private void lockPrivate(){
+        if(!privateMode)return;
+        ++request;pinEpoch++;
+        releaseMediaViewers();
+        if(playing)stopVideo();
+        if(playbackDialog!=null)playbackDialog.dismiss();
+        mediaSession.setMetadata(null);
+        entries.clear();subtitlesInFolder.clear();folderLabels.clear();fileScroll.clear();
+        clearMediaPreviews();
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        showHome(homeKind(),"");
+    }
+
+    private void manageEntry(Entry entry){
+        if(entry==null)return;
+        String key=PrivateLibrary.key(entry.url);
+        boolean marked=privateLibrary.marks().contains(key);
+        if(!canManage(entry)){
+            showItems(entry.name+" · 只读",new String[]{marked?"恢复到普通列表":"移入隐私列表"},choice->changePrivacy(entry,key,marked));
+            return;
+        }
+        showItems(entry.name,new String[]{"重命名",marked?"恢复到普通列表":"移入隐私列表","删除"},choice->{
+            if(choice==0)askRename(entry);
+            if(choice==1)changePrivacy(entry,key,marked);
+            if(choice==2)confirmDelete(entry,false);
+        });
+    }
+
+    private void changePrivacy(Entry entry,String key,boolean marked){
+        withPin(()->{
+            if(marked)removePrivacyRecords(key,false);
+            else markPrivate(key,entry.name,entry.url,entry.folder,homeFocusId);
+            if(privateFileTarget!=null&&marked)showPrivateIndex();else renderBrowser("",true);
+        });
+    }
+
+    private boolean canManage(Entry entry){
+        if(!entry.url.startsWith("content://"))return true;
+        return checkUriPermission(Uri.parse(entry.url),android.os.Process.myPid(),android.os.Process.myUid(),
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION)==android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void askRename(Entry entry){
+        int dot=entry.folder?-1:entry.name.lastIndexOf('.');
+        String extension=dot>0?entry.name.substring(dot):"";
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(dp(16),0,dp(16),0);
+        EditText input=field(form,extension.isEmpty()?"新名称":"新文件名 · 保留 "+extension,dot>0?entry.name.substring(0,dot):entry.name,InputType.TYPE_CLASS_TEXT,false);
+        List<Entry> related=new ArrayList<>();
+        if(dot>0){
+            String stem=entry.name.substring(0,dot);
+            for(Entry sidecar:subtitlesInFolder)if(sidecar.name.lastIndexOf('.')>0&&sidecar.name.substring(0,sidecar.name.lastIndexOf('.')).equalsIgnoreCase(stem))related.add(sidecar);
+        }
+        android.widget.CheckBox renameRelated=new android.widget.CheckBox(this);
+        if(!related.isEmpty()){renameRelated.setText("同时重命名同名字幕 / 歌词");form.addView(renameRelated);}
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("重命名").setView(form)
+                .setNegativeButton("取消",null).setPositiveButton("保存",null).create();
+        showPlaybackDialog(dialog);
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String stem=input.getText().toString().trim(),name=stem+extension;
+            if(stem.isEmpty()||stem.equals(".")||stem.equals("..")||stem.matches(".*[\\\\/:*?\"<>|\\p{Cntrl}].*")){
+                input.setError("请输入有效名称");return;
+            }
+            if(entry.name.equals(name)){dialog.dismiss();return;}
+            dialog.dismiss();mutateEntry(entry,name,renameRelated.isChecked()?related:java.util.Collections.emptyList(),stem);
+        });
+    }
+
+    private void confirmDelete(Entry entry,boolean finalStep){
+        String message=entry.name+(entry.folder?"\n此操作会删除目录和其中的内容。":"\n此操作会删除原文件。");
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(finalStep?"确认删除整个目录？":"确认删除？")
+                .setMessage(message).setNegativeButton("取消",null).setPositiveButton(entry.folder&&!finalStep?"继续":"删除",(d,w)->{
+                    if(entry.folder&&!finalStep)confirmDelete(entry,true);
+                    else mutateEntry(entry,null,java.util.Collections.emptyList(),"");
+                }).create();
+        showPlaybackDialog(dialog);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocusFromTouch();
+    }
+
+    private void mutateEntry(Entry entry,String name,List<Entry> related,String stem){
+        String directory=currentUrl;
+        if(directory==null)return;
+        int token=++request;
+        CIFSContext context=connection;
+        boolean local=localTree!=null;
+        network.execute(()->{
+            String updated=null,message="";
+            boolean changed=false;
+            try{
+                updated=mutateFile(entry,name,directory,context);
+                changed=true;
+                for(Entry sidecar:related){
+                    String suffix=sidecar.name.substring(sidecar.name.lastIndexOf('.'));
+                    try{mutateFile(sidecar,stem+suffix,directory,context);}
+                    catch(Exception error){message="文件已重命名，部分关联文件未能改名";}
+                }
+            }catch(Exception error){message=name==null?"删除未完成，请检查权限与剩余内容":"无法重命名，请检查写入权限或同名文件";}
+            String url=updated,result=message;
+            boolean success=changed;
+            ui.post(()->{
+                if(success)updateReferences(entry,url,name);
+                if(token!=request||isFinishing()||isDestroyed())return;
+                if(!result.isEmpty())android.widget.Toast.makeText(this,result,android.widget.Toast.LENGTH_LONG).show();
+                if(privateFileTarget!=null){
+                    if(success&&url==null){showPrivateIndex();return;}
+                    if(success)privateFileTarget=new Entry(name,url,false);
+                }
+                if(local)loadLocal(directory,url,false);else load(directory,url);
+            });
+        });
+    }
+
+    private String mutateFile(Entry entry,String name,String directory,CIFSContext context)throws IOException{
+        if(entry.url.startsWith("smb://")){
+            try(SmbFile file=new SmbFile(entry.url,context)){
+                if(name==null){file.delete();return null;}
+                String target=directory+(directory.endsWith("/")?"":"/")+name+(entry.folder?"/":"");
+                try(SmbFile other=new SmbFile(target,context)){
+                    if(other.exists())throw new IOException("Name exists");
+                    file.renameTo(other,false);return other.getURL().toExternalForm();
+                }
+            }
+        }
+        Uri uri=Uri.parse(entry.url);
+        if(name==null){
+            if(!DocumentsContract.deleteDocument(getContentResolver(),uri))throw new IOException("Delete declined");
+            return null;
+        }
+        Uri tree=Uri.parse(directory);
+        Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,DocumentsContract.getDocumentId(tree));
+        try(Cursor cursor=getContentResolver().query(children,new String[]{"_display_name"},null,null,null)){
+            if(cursor==null)throw new IOException("Cannot check existing files");
+            while(cursor.moveToNext())if(name.equalsIgnoreCase(cursor.getString(0)))throw new IOException("Name exists");
+        }
+        Uri renamed=DocumentsContract.renameDocument(getContentResolver(),uri,name);
+        if(renamed==null)throw new IOException("Rename declined");
+        return renamed.toString();
+    }
+
+    private void updateReferences(Entry entry,String target,String name){
+        String from=PrivateLibrary.key(entry.url);
+        if(target==null)removePrivacyRecords(from,true);
+        else{
+            String to=PrivateLibrary.key(target);
+            privateLibrary.remap(from,to);
+            org.json.JSONArray records=privateRecords();
+            for(int i=0;i<records.length();i++){
+                org.json.JSONObject record=records.optJSONObject(i);
+                if(record==null)continue;
+                try{
+                    String key=record.optString("key");
+                    if(PrivateLibrary.under(key,from)){
+                        record.put("key",to+key.substring(from.length()));
+                        if(key.equals(from))record.put("url",target).put("name",name);
+                        else record.put("url",remapMediaUrl(record.optString("url"),entry.url,target));
+                    }
+                    String parent=record.optString("parent");
+                    if(!parent.isEmpty())record.put("parent",remapMediaUrl(parent,entry.url,target));
+                }catch(org.json.JSONException ignored){}
+            }
+            privacyPrefs().edit().putString("records",records.toString()).apply();
+        }
+        SharedPreferences.Editor edit=history.edit();
+        try{
+            org.json.JSONArray previous=new org.json.JSONArray(history.getString("recentOrder","[]"));
+            org.json.JSONArray remapped=new org.json.JSONArray();
+            for(int i=0;i<previous.length();i++){
+                String url=previous.getString(i);
+                if(!PrivateLibrary.under(PrivateLibrary.key(url),from))remapped.put(url);
+                else if(target!=null)remapped.put(remapMediaUrl(url,entry.url,target));
+            }
+            edit.putString("recentOrder",remapped.toString());
+        }catch(org.json.JSONException ignored){}
+        for(java.util.Map.Entry<String,?> saved:history.getAll().entrySet()){
+            String key=saved.getKey();
+            if(!key.startsWith("content://")&&!key.startsWith("smb://"))continue;
+            if(!PrivateLibrary.under(PrivateLibrary.key(key),from))continue;
+            edit.remove(key);
+            if(target!=null&&saved.getValue() instanceof Long)edit.putLong(remapMediaUrl(key,entry.url,target),(Long)saved.getValue());
+        }
+        edit.apply();clearMediaPreviews();
+    }
+
+    private String remapMediaUrl(String value,String from,String to){
+        if(value.equals(from))return to;
+        if(value.startsWith(from.endsWith("/")?from:from+"/"))return to+(to.endsWith("/")||from.endsWith("/")?"":"/")+value.substring(from.length()+(from.endsWith("/")?0:1));
+        if(value.startsWith("content://")&&from.startsWith("content://")){
+            try{
+                Uri source=Uri.parse(from),item=Uri.parse(value),target=Uri.parse(to);
+                String root=DocumentsContract.getDocumentId(source),id=DocumentsContract.getDocumentId(item);
+                if(source.getAuthority().equals(item.getAuthority())&&id.startsWith(root+"/"))
+                    return DocumentsContract.buildDocumentUriUsingTree(target,DocumentsContract.getDocumentId(target)+id.substring(root.length())).toString();
+            }catch(IllegalArgumentException ignored){}
+        }
+        return value;
+    }
+
     private static boolean isVideo(String name) {
         return name.toLowerCase(Locale.ROOT).matches(".*\\.(mp4|m4v|mkv|webm|ts|m2ts|mov|avi|mpg|mpeg|3gp|wmv|flv)$");
     }
@@ -2716,6 +3340,7 @@ public final class MainActivity extends Activity {
 
     private void pickDocument(String action, int code) {
         Intent intent = new Intent(action);
+        if(code==10)intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         if (Intent.ACTION_OPEN_DOCUMENT.equals(action)) {
             intent.setType("*/*");
             intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -2737,8 +3362,11 @@ public final class MainActivity extends Activity {
         Uri uri = data.getData();
         if (code == 10) {
             try {
-                if ((data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0)
-                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                if ((data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+                    if ((data.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0)
+                        getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    else getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                }
             } catch (SecurityException ignored) {}
             try {
                 org.json.JSONObject item=null;org.json.JSONArray sources=homeSources();
@@ -2785,6 +3413,7 @@ public final class MainActivity extends Activity {
     }
 
     private void loadLocal(String url, String restore, boolean enteredChild) {
+        if(!privateMode&&privateLibrary.hidden(PrivateLibrary.key(url),privateLibrary.marks())){showHome(sourceKind,"此目录已移入隐私列表");return;}
         int token = ++request;
         Uri tree = localTree;
         browsing = true;
@@ -2805,8 +3434,8 @@ public final class MainActivity extends Activity {
                         Uri item = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(0));
                         Entry entry = new Entry(name, item.toString(), folder, cursor.getLong(3), 0,
                                 cursor.isNull(4) ? -1 : cursor.getLong(4));
-                        if (folder || isVideo(name) || isPlaylist(name) || mime != null && mime.startsWith("video/")) files.add(entry);
-                        else if (isSubtitle(name)) subtitles.add(entry);
+                        if (folder || mediaType(name)>0) files.add(entry);
+                        else if (isSubtitle(name)||isLyrics(name)) subtitles.add(entry);
                     }
                 }
                 sortEntries(files);
@@ -2957,7 +3586,7 @@ public final class MainActivity extends Activity {
         List<Entry> matches = new ArrayList<>();
         for (Entry subtitle : subtitlesInFolder) {
             String name = subtitle.name.toLowerCase(Locale.ROOT);
-            if (name.startsWith(base + ".") && matches.size() < 8) matches.add(subtitle);
+            if (isSubtitle(name) && name.startsWith(base + ".") && matches.size() < 8) matches.add(subtitle);
         }
         if (matches.isEmpty()) return;
         CIFSContext context = connection;
@@ -3029,7 +3658,7 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private static final class Entry {
+    static final class Entry {
         final String name;
         final String url;
         final boolean folder;

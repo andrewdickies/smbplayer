@@ -10,12 +10,12 @@ CLASSES = [
     "PlaybackByteCache", "RangeReadAhead", "ForwardCache", "VideoRecovery",
     "DownloadRate", "MediaBufferIndex", "BufferIndexSupport", "Mp4BufferIndex",
     "MatroskaBufferIndex", "FragmentedMp4BufferIndex", "TvSeekPolicy",
-    "FileDisplay", "PlaylistOrder",
+    "FileDisplay", "PlaylistOrder", "Lyrics",
 ]
 CHECKS = [
     "BufferIndexCheck", "Mp4EdgeCheck", "RangeReadAheadCheck", "ForwardCacheCheck",
     "VideoRecoveryCheck", "DownloadRateCheck", "TvSeekPolicyCheck",
-    "FileDisplayCheck", "PlaylistOrderCheck", "CacheRetentionCheck",
+    "FileDisplayCheck", "PlaylistOrderCheck", "CacheRetentionCheck", "LyricsCheck",
 ]
 
 

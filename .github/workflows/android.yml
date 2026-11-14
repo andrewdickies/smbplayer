@@ -54,7 +54,7 @@ jobs:
           path: app/build/reports/lint-results-debug.*
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v0.30]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release v1.0.0]')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -63,26 +63,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: smbplayer-armeabi-v7a-optimized
-      - name: Publish v0.30
+      - name: Publish v1.0.0
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cp apk/release/app-release.apk smbplayer-v0.30-armeabi-v7a.apk
+          cp apk/release/app-release.apk smbplayer-v1.0.0-armeabi-v7a.apk
           cp mapping/release/mapping.txt mapping.txt
-          sha256sum smbplayer-v0.30-armeabi-v7a.apk > SHA256SUMS
+          sha256sum smbplayer-v1.0.0-armeabi-v7a.apk > SHA256SUMS
           cat > notes.md <<'EOF'
-          ## smbplayer 0.30
-          - Hidden-control seeking reuses the existing timeline: target position, total duration and cumulative seek offset; no header or action buttons.
-          - Preview hides after about two seconds of inactivity, and stays visible while buffering/recovering.
-          - Forward cache target increased to five minutes, refilling below four minutes; total disk budget up to 5 GiB, reduced to preserve at least 1 GiB or 15% of initially available space.
-          - Cache grows on writes. Retains watched data within budget and prioritizes eviction of older, distant blocks outside the protected playback window.
-          - Android 6.0+, armeabi-v7a only. Optimized build; LibVLC native engine unchanged.
+          ## smbplayer 1.0.0
+          - Browse photos and play music from local or SMB directories.
+          - Photo zoom and pan, fullscreen fit/fill, and configurable slideshow motion.
+          - FLAC and APE playback with timestamped LRC lyrics and line seeking.
+          - PIN-protected hidden items, file and folder management, and video touch seeking.
+          - Android 6.0+, armeabi-v7a. The APK uses the CI development key. Includes SHA256SUMS and R8 mapping.
 
-          Redmi K30 checks use a locally signed optimized build of this source. This attachment is rebuilt in GitHub Actions with a development key; its signature may differ from existing installations. Includes SHA256SUMS and the R8 mapping file. Actual TV decoder/HDR/CEC/passthrough behavior remains device-dependent.
           EOF
-          if ! gh release view v0.30 >/dev/null 2>&1; then
-            gh release create v0.30 --target "$GITHUB_SHA" --title "smbplayer v0.30" --notes-file notes.md --draft
+          if ! gh release view v1.0.0 >/dev/null 2>&1; then
+            gh release create v1.0.0 --target "$GITHUB_SHA" --title "smbplayer v1.0.0" --notes-file notes.md --draft
           fi
-          gh release upload v0.30 smbplayer-v0.30-armeabi-v7a.apk SHA256SUMS mapping.txt
-          gh release edit v0.30 --draft=false --latest
+          gh release upload v1.0.0 smbplayer-v1.0.0-armeabi-v7a.apk SHA256SUMS mapping.txt
+          gh release edit v1.0.0 --draft=false --latest
