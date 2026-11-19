@@ -41,18 +41,16 @@ final class HomeDashboard extends ViewGroup {
     }
     @Override protected void onMeasure(int widthSpec,int heightSpec){
         int width=MeasureSpec.getSize(widthSpec),available=Math.max(1,width-getPaddingLeft()-getPaddingRight());
-        int minCard=dp(160);
-        for(Card card:cards)minCard=Math.max(minCard,(int)Math.ceil(card.label.getPaint().measureText(card.label.getText().toString()))+dp(28));
+        int minCard=dp(220);
+        for(Card card:cards)minCard=Math.max(minCard,(int)Math.ceil(card.label.getPaint().measureText(card.label.getText().toString()))+dp(114));
         firstCount=available>=cards.size()*minCard+(cards.size()-1)*gap?cards.size():Math.max(1,(cards.size()+1)/2);
         rows=firstCount==cards.size()?1:2;
-        cardWidth=Math.max(1,Math.min(dp(240),(available-(firstCount-1)*gap)/firstCount));
-        cardHeight=rows==1?Math.max(dp(176),Math.min(dp(216),cardWidth))
-                :Math.min(dp(176),Math.max(1,(viewportHeight-getPaddingTop()-getPaddingBottom()-gap)/2));
-        // System font enlargement can require extra height; scrolling keeps every card reachable.
+        cardWidth=Math.max(1,Math.min(dp(292),(available-(firstCount-1)*gap)/firstCount));
+        cardHeight=rows==1?dp(142):Math.min(dp(116),Math.max(1,(viewportHeight-getPaddingTop()-getPaddingBottom()-gap)/2));
         for(Card card:cards){
-            int lines=card.label.getPaint().measureText(card.label.getText().toString())>cardWidth-dp(24)?2:1;
+            int lines=card.label.getPaint().measureText(card.label.getText().toString())>cardWidth-dp(rows==1?112:94)?2:1;
             card.setCompact(rows>1);
-            cardHeight=Math.max(cardHeight,dp(rows==1?64+16+32:56+12+24)+lines*card.label.getLineHeight());
+            cardHeight=Math.max(cardHeight,dp(32)+Math.max(dp(rows==1?68:54),lines*card.label.getLineHeight()));
         }
         int contentHeight=rows*cardHeight+(rows-1)*gap;
         int desired=contentHeight+getPaddingTop()+getPaddingBottom();
@@ -80,30 +78,36 @@ final class HomeDashboard extends ViewGroup {
     static final class Card extends FrameLayout {
         final TextView label;
         final ImageView icon;
+        final FrameLayout iconPlate;
         final LinearLayout content;
         Card(Context context,String title,int resource,Drawable background,Runnable action){
             super(context);setId(View.generateViewId());setBackground(background);
             setFocusable(true);setFocusableInTouchMode(true);setClickable(true);
             setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);setContentDescription(title);
             setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
-            content=new LinearLayout(context);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER);
+            content=new LinearLayout(context);content.setOrientation(LinearLayout.HORIZONTAL);content.setGravity(Gravity.CENTER_VERTICAL);
             content.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-            int pad=dp(12);setPadding(pad,pad,pad,pad);
+            int pad=dp(18);setPadding(pad,pad,pad,pad);
+            iconPlate=new FrameLayout(context);
+            android.graphics.drawable.GradientDrawable plate=new android.graphics.drawable.GradientDrawable();
+            plate.setColor(0xff263940);plate.setCornerRadius(dp(12));
+            iconPlate.setBackground(plate);
             icon=new ImageView(context);icon.setImageResource(resource);icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            content.addView(icon,new LinearLayout.LayoutParams(dp(64),dp(64)));
+            iconPlate.addView(icon,new FrameLayout.LayoutParams(dp(40),dp(40),Gravity.CENTER));
+            content.addView(iconPlate,new LinearLayout.LayoutParams(dp(68),dp(68)));
             label=new TextView(context);label.setText(title);label.setTextSize(24);label.setTextColor(0xffffffff);
-            label.setTypeface(Typeface.DEFAULT_BOLD);label.setGravity(Gravity.CENTER);label.setMaxLines(2);
+            label.setTypeface(Typeface.DEFAULT_BOLD);label.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);label.setMaxLines(2);
             label.setEllipsize(android.text.TextUtils.TruncateAt.END);label.setIncludeFontPadding(false);
-            LinearLayout.LayoutParams labelSpace=new LinearLayout.LayoutParams(-1,-2);labelSpace.topMargin=dp(16);content.addView(label,labelSpace);
+            LinearLayout.LayoutParams labelSpace=new LinearLayout.LayoutParams(0,-2,1);labelSpace.setMarginStart(dp(16));content.addView(label,labelSpace);
             addView(content,new FrameLayout.LayoutParams(-1,-2,Gravity.CENTER));
             setOnClickListener(v->action.run());
         }
         void setCompact(boolean compact){
-            int size=dp(compact?56:64),gap=dp(compact?12:16);
-            LinearLayout.LayoutParams image=(LinearLayout.LayoutParams)icon.getLayoutParams();
-            if(image.width!=size){image.width=size;image.height=size;icon.setLayoutParams(image);}
+            int size=dp(compact?54:68),gap=dp(compact?12:16);
+            LinearLayout.LayoutParams image=(LinearLayout.LayoutParams)iconPlate.getLayoutParams();
+            if(image.width!=size){image.width=size;image.height=size;iconPlate.setLayoutParams(image);}
             LinearLayout.LayoutParams title=(LinearLayout.LayoutParams)label.getLayoutParams();
-            if(title.topMargin!=gap){title.topMargin=gap;label.setLayoutParams(title);}
+            if(title.getMarginStart()!=gap){title.setMarginStart(gap);label.setLayoutParams(title);}
         }
         private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
         @Override public boolean onTouchEvent(MotionEvent event){if(event.getActionMasked()==MotionEvent.ACTION_DOWN)requestFocusFromTouch();return super.onTouchEvent(event);}

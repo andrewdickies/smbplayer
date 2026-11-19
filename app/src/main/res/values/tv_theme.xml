@@ -1,15 +1,15 @@
 <resources>
     <style name="TvTheme" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:colorAccent">#68C9DD</item>
-        <item name="android:windowBackground">#121212</item>
+        <item name="android:windowBackground">#101416</item>
         <item name="android:textColorPrimary">#FFFFFF</item>
-        <item name="android:textColorSecondary">#AAAAAA</item>
+        <item name="android:textColorSecondary">#AEBBC0</item>
         <item name="android:alertDialogTheme">@style/TvDialogTheme</item>
     </style>
     <style name="TvDialogTheme" parent="@android:style/Theme.Material.Dialog.Alert">
         <item name="android:colorAccent">#68C9DD</item>
         <item name="android:textColorPrimary">#FFFFFF</item>
-        <item name="android:textColorSecondary">#AAAAAA</item>
+        <item name="android:textColorSecondary">#AEBBC0</item>
         <item name="android:windowTitleStyle">@style/TvDialogTitle</item>
         <item name="android:buttonBarPositiveButtonStyle">@style/TvDialogButton</item>
         <item name="android:buttonBarNegativeButtonStyle">@style/TvDialogButton</item>

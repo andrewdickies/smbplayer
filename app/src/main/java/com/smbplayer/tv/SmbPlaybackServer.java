@@ -5,6 +5,7 @@ package com.smbplayer.tv;
 import java.io.IOException;
 import java.io.File;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -80,6 +81,19 @@ final class SmbPlaybackServer extends NanoHTTPD {
     List<long[]> bufferedRanges(long durationMs) {
         duration = durationMs;
         return buffered;
+    }
+
+    /** Byte positions mapped proportionally for audio formats without a time index. */
+    List<long[]> estimatedAudioBuffer(long durationMs) {
+        PlaybackByteCache disk = cache;
+        if (disk == null || durationMs <= 0) return Collections.emptyList();
+        List<long[]> result = new ArrayList<>();
+        for (long[] range : disk.ranges()) {
+            long start = (long) (durationMs * (range[0] / (double) size));
+            long end = (long) (durationMs * (Math.min(size, range[1]) / (double) size));
+            if (end > start) result.add(new long[]{start, end});
+        }
+        return result;
     }
 
     long streamedRemoteBytes() { return remoteBytes.get(); }

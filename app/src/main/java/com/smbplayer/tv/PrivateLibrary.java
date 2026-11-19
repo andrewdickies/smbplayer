@@ -18,16 +18,27 @@ final class PrivateLibrary {
     boolean hasPin() { return settings.contains("pin"); }
 
     boolean verify(String pin, boolean create) throws Exception {
+        if (create) return !hasPin() && savePin(pin);
+        if (!hasPin()) return false;
+        byte[] salt = Base64.decode(settings.getString("salt", ""), Base64.DEFAULT);
+        return MessageDigest.isEqual(hash(pin, salt), Base64.decode(settings.getString("pin", ""), Base64.DEFAULT));
+    }
+
+    boolean savePin(String pin) throws Exception {
         byte[] salt = new byte[16];
-        if (create) new SecureRandom().nextBytes(salt);
-        else salt = Base64.decode(settings.getString("salt", ""), Base64.DEFAULT);
-        PBEKeySpec spec = new PBEKeySpec(pin.toCharArray(), salt, 180000, 256);
-        byte[] hash;
-        try { hash = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded(); }
-        finally { spec.clearPassword(); }
-        if (!create) return MessageDigest.isEqual(hash, Base64.decode(settings.getString("pin", ""), Base64.DEFAULT));
+        new SecureRandom().nextBytes(salt);
         return settings.edit().putString("salt", Base64.encodeToString(salt, Base64.NO_WRAP))
-                .putString("pin", Base64.encodeToString(hash, Base64.NO_WRAP)).commit();
+                .putString("pin", Base64.encodeToString(hash(pin, salt), Base64.NO_WRAP)).commit();
+    }
+
+    boolean clearPin() {
+        return settings.edit().remove("pin").remove("salt").remove("marks").remove("records").commit();
+    }
+
+    private static byte[] hash(String pin, byte[] salt) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(pin.toCharArray(), salt, 180000, 256);
+        try { return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded(); }
+        finally { spec.clearPassword(); }
     }
 
     Set<String> marks() { return new LinkedHashSet<>(settings.getStringSet("marks", java.util.Collections.emptySet())); }

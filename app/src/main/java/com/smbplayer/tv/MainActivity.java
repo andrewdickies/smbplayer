@@ -51,9 +51,10 @@ import jcifs.smb.NtlmPasswordAuthenticator;
 import jcifs.smb.SmbFile;
 
 public final class MainActivity extends Activity {
-    private static final int BACKGROUND = 0xff121212;
-    private static final int ACCENT = 0xff68c9dd;
-    private static final int SECONDARY = 0xffaaaaaa;
+    private static final int BACKGROUND = 0xff101416;
+    static final int ACCENT = 0xff68c9dd;
+    static final int SECONDARY = 0xffaebbc0;
+    private static final int SURFACE = 0xff1b2327;
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final ExecutorService previews = new java.util.concurrent.ThreadPoolExecutor(
             1, 1, 0, java.util.concurrent.TimeUnit.MILLISECONDS,
@@ -70,7 +71,7 @@ public final class MainActivity extends Activity {
     private final java.util.ArrayDeque<Runnable> settingsParents = new java.util.ArrayDeque<>();
     private Runnable settingsRenderer;
     private boolean settingsPage;
-    private Button aspectButton, speedButton, playerBack;
+    private Button aspectButton, speedButton, pipButton, playerBack;
 
     private EditText host, port, share, user, password;
     private String passwordForSession = "";
@@ -129,7 +130,6 @@ public final class MainActivity extends Activity {
                 screenOff = true;pinEpoch++;
                 if(pinDialog!=null)pinDialog.dismiss();
                 if (privateMode) lockPrivate();
-                else if (musicViewer != null) musicViewer.pause();
                 else if (photoViewer != null) photoViewer.suspend();
                 else if (prepared) requestPause(true);
             } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
@@ -155,7 +155,7 @@ public final class MainActivity extends Activity {
     private LinearLayout controls;
     private LinearLayout header;
     private LinearLayout loadingOverlay;
-    private TextView loadingText;
+    private TextView loadingRate;
     private VLCVideoLayout videoLayout;
     private AssetFileDescriptor playerFd;
     private TextView playbackStatus;
@@ -182,15 +182,15 @@ public final class MainActivity extends Activity {
     private boolean retainingRecovery;
     private MediaPlayer gatedPlayer;
     private int gatedVolume=-1,gatedTrack=Integer.MIN_VALUE;
+    private long lastFramePoll;
     private final DownloadRate downloadRate=new DownloadRate();
     private Object rateSource;
     private long nativeReadEpoch,lastNativeBytes;
-    private double networkRate;
-    private long lastFramePoll;
     private final Runnable loadingTick=new Runnable(){@Override public void run(){
         if(!playing)return;
-        updateNetworkRate();
-        if(buffering&&!pauseRequested&&!dragging&&android.os.SystemClock.elapsedRealtime()>=loadingDue){loadingText.setText(bufferingLabel());loadingOverlay.setVisibility(View.VISIBLE);}
+        updateBufferingRate();
+        if(buffering&&!inVideoPip()&&!pauseRequested&&!dragging&&android.os.SystemClock.elapsedRealtime()>=loadingDue)
+            loadingOverlay.setVisibility(View.VISIBLE);
         ui.postDelayed(this,500);
     }};
 
@@ -228,6 +228,11 @@ public final class MainActivity extends Activity {
     private boolean keepControlsHidden;
     private boolean startWithChromeHidden;
     private long exitPromptAt;
+    private final java.util.Set<Integer> heldVideoKeys=new java.util.HashSet<>();
+    private boolean videoTouchActive;
+    private final Runnable autoHideControls=()->{
+        if(canHideVideoControls())this.hideControls.run();
+    };
     private final Runnable hideControls = () -> {
         seekPreviewShown=false;ui.removeCallbacks(hideSeekPreview);
         keepControlsHidden = true;
@@ -265,7 +270,7 @@ public final class MainActivity extends Activity {
         settings = new PlaybackPreferences(defaults);
         history = getSharedPreferences("playback", MODE_PRIVATE);
         privateLibrary = new PrivateLibrary(getSharedPreferences("privacy", MODE_PRIVATE));
-        mediaFilter = Math.max(0, Math.min(3, settings.getInt("mediaFilter", 0)));
+        mediaFilter = Math.max(0, Math.min(3, settings.getInt("mediaFilterV2", 3)));
         android.media.AudioManager audio=(android.media.AudioManager)getSystemService(AUDIO_SERVICE);
         if(audio!=null)audio.registerAudioDeviceCallback(audioRoutes,ui);
         mediaSession = new android.media.session.MediaSession(this, "SmbPlayer");
@@ -306,7 +311,28 @@ public final class MainActivity extends Activity {
             @Override public void onRewind() { if (playing) seek(-seekStep()); }
         });
         showDashboard();
+        if(MusicPlaybackService.OPEN.equals(getIntent().getAction()))resumeMusicPlayback();
     }
+
+    @Override protected void onNewIntent(Intent intent){
+        super.onNewIntent(intent);setIntent(intent);
+        if(MusicPlaybackService.OPEN.equals(intent.getAction()))resumeMusicPlayback();
+    }
+
+    private void resumeMusicPlayback(){
+        MusicPlaybackService service=MusicPlaybackService.current;
+        if(service==null||!service.hasQueue())return;
+        if(service.privatePlayback()&&!privateMode){
+            withPin(()->{showPrivateIndex();resumeMusicPlayback();});
+            return;
+        }
+        if(playing)stopVideo();
+        releaseMediaViewers();
+        musicViewer=new MusicViewer(this,service.songs(),service.sidecars(),service.index());
+    }
+
+    CIFSContext musicContext(){return connection;}
+    boolean isPrivatePlayback(){return privateMode;}
 
     int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
@@ -320,13 +346,16 @@ public final class MainActivity extends Activity {
         return view;
     }
 
+    private final class UiButton extends Button {
+        UiButton(){super(MainActivity.this);}
+        @Override public boolean onTouchEvent(android.view.MotionEvent event){
+            if(event.getActionMasked()==android.view.MotionEvent.ACTION_DOWN&&isEnabled())requestFocusFromTouch();
+            return super.onTouchEvent(event);
+        }
+    }
+
     private Button button(String label, Runnable action) {
-        Button view = new Button(this) {
-            @Override public boolean onTouchEvent(android.view.MotionEvent event) {
-                if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN && isEnabled()) requestFocusFromTouch();
-                return super.onTouchEvent(event);
-            }
-        };
+        Button view=new UiButton();
         view.setId(View.generateViewId());
         view.setAllCaps(false);
         view.setText(label);
@@ -338,9 +367,10 @@ public final class MainActivity extends Activity {
         view.setFocusable(true);
         view.setFocusableInTouchMode(true);
         android.graphics.drawable.StateListDrawable backgrounds = new android.graphics.drawable.StateListDrawable();
-        backgrounds.addState(new int[] {-android.R.attr.state_enabled}, buttonBackground(0xff181818, 0xff333333));
-        backgrounds.addState(new int[] {android.R.attr.state_focused}, buttonBackground(0xff263134, ACCENT));
-        backgrounds.addState(new int[] {}, buttonBackground(0xff292929, 0xff464646));
+        backgrounds.addState(new int[] {-android.R.attr.state_enabled}, buttonBackground(0xff181e21, Color.TRANSPARENT));
+        backgrounds.addState(new int[] {android.R.attr.state_focused}, buttonBackground(0xff24383e, ACCENT));
+        backgrounds.addState(new int[] {android.R.attr.state_pressed}, buttonBackground(0xff294148, Color.TRANSPARENT));
+        backgrounds.addState(new int[] {}, buttonBackground(SURFACE, Color.TRANSPARENT));
         view.setBackground(backgrounds);
         view.setPadding(dp(12), dp(6), dp(12), dp(6));
         view.setTextColor(new ColorStateList(
@@ -362,33 +392,36 @@ public final class MainActivity extends Activity {
 
     Button iconButton(String icon, String label, Runnable action) {
         Button result = button("", action);
-        result.setMinWidth(dp(52));
+        result.setMinWidth(0);
+        result.setMinimumWidth(0);
+        result.setLayoutParams(new LinearLayout.LayoutParams(dp(52),dp(52)));
         result.setGravity(Gravity.CENTER);
         updateIcon(result, icon, label);
         return result;
     }
 
     void updateIcon(Button button, String icon, String label) {
-        ActionIcon drawable = new ActionIcon(icon);
-        int width = dp(27);
-        drawable.setBounds(0, 0, width, width);
-        button.setCompoundDrawables(null, drawable, null, null);
-        button.setPadding(dp(9),dp(9),dp(9),dp(2));
+        ActionIcon drawable=new ActionIcon(icon);
+        int size=dp(27);
+        drawable.setBounds(0,0,size,size);
+        button.setCompoundDrawables(drawable,null,null,null);
+        int width=button.getWidth()>0?button.getWidth():dp(52);
+        int start=(width-size)/2;
+        button.setPadding(start,0,width-size-start,0);
+        button.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);
         button.setCompoundDrawablePadding(0);
         button.setContentDescription(label);
-        if (android.os.Build.VERSION.SDK_INT >= 26) button.setTooltipText(label);
-        if (button.hasFocus()) button.setText(label);
-        button.setTextSize(13);
+        button.setText("");
+        button.setTextSize(14);
         button.setIncludeFontPadding(false);
-        button.setOnFocusChangeListener((v,focused)->button.setText(focused?button.getContentDescription():""));
     }
 
     private void setPlaybackButton(boolean active) {
         updateIcon(pause, active ? "pause" : "play", active ? "暂停" : "继续");
     }
 
-    private android.graphics.drawable.LayerDrawable tvProgressTrack() {
-        android.graphics.drawable.GradientDrawable remaining = buttonBackground(0xff464646, 0xff464646);
+    android.graphics.drawable.LayerDrawable tvProgressTrack() {
+        android.graphics.drawable.GradientDrawable remaining = buttonBackground(0xff4e6068,Color.TRANSPARENT);
         android.graphics.drawable.ClipDrawable played = new android.graphics.drawable.ClipDrawable(
                 buttonBackground(ACCENT, ACCENT), Gravity.LEFT, android.graphics.drawable.ClipDrawable.HORIZONTAL);
         android.graphics.drawable.LayerDrawable track = new android.graphics.drawable.LayerDrawable(
@@ -402,12 +435,19 @@ public final class MainActivity extends Activity {
         return track;
     }
 
-    private android.graphics.drawable.GradientDrawable buttonBackground(int color, int border) {
+    android.graphics.drawable.GradientDrawable buttonBackground(int color, int border) {
         android.graphics.drawable.GradientDrawable drawable = new android.graphics.drawable.GradientDrawable();
         drawable.setColor(color);
-        drawable.setCornerRadius(dp(8));
-        drawable.setStroke(dp(border == ACCENT ? 4 : 1), border);
+        drawable.setCornerRadius(dp(12));
+        if(border!=Color.TRANSPARENT)drawable.setStroke(dp(border == ACCENT ? 3 : 1),border);
         return drawable;
+    }
+
+    android.graphics.drawable.GradientDrawable playbackScrim(boolean top){
+        return new android.graphics.drawable.GradientDrawable(
+                top?android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
+                        :android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP,
+                new int[]{0xcf080c0e,0x92080c0e,Color.TRANSPARENT});
     }
 
     private LinearLayout column() {
@@ -439,12 +479,18 @@ public final class MainActivity extends Activity {
         LinearLayout page = column(); page.setPadding(dp(32),dp(16),dp(32),dp(16)); pageRoot = page; sourceTabs.clear();
         LinearLayout brand = new LinearLayout(this); brand.setGravity(Gravity.CENTER_VERTICAL);
         android.widget.ImageView logo = new android.widget.ImageView(this); logo.setImageResource(R.mipmap.ic_launcher);
-        brand.addView(logo, new LinearLayout.LayoutParams(dp(40), dp(40)));
-        TextView title = text("smbplayer", 32); title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        brand.addView(logo, new LinearLayout.LayoutParams(dp(34), dp(34)));
+        TextView title = text("smbplayer", 28); title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-2, -2); titleParams.leftMargin = dp(14);
         brand.addView(title, titleParams);
         View spacer=new View(this);brand.addView(spacer,new LinearLayout.LayoutParams(0,1,1));
-        Button settingsButton=button("设置",()->{dashboardFocusKind="settings";showAppSettings();});
+        if(MusicPlaybackService.current!=null&&MusicPlaybackService.current.hasQueue()
+                &&!MusicPlaybackService.current.privatePlayback()){
+            Button resume=iconButton("music","正在播放",this::resumeMusicPlayback);
+            brand.addView(resume);
+            ((LinearLayout.LayoutParams)resume.getLayoutParams()).setMarginEnd(dp(10));
+        }
+        Button settingsButton=iconButton("settings","设置",()->{dashboardFocusKind="settings";showAppSettings();});
         settingsButton.setId(View.generateViewId());brand.addView(settingsButton);sourceTabs.put("settings",settingsButton);
         page.addView(brand,new LinearLayout.LayoutParams(-1,-2));
         String[] kinds={"local","nas"};
@@ -454,9 +500,9 @@ public final class MainActivity extends Activity {
         for(int i=0;i<kinds.length;i++){
             String kind=kinds[i];
             android.graphics.drawable.StateListDrawable background=new android.graphics.drawable.StateListDrawable();
-            background.addState(new int[]{android.R.attr.state_focused},buttonBackground(0xff263134,ACCENT));
-            background.addState(new int[]{android.R.attr.state_pressed},buttonBackground(0xff303b3e,ACCENT));
-            background.addState(new int[]{},buttonBackground(0xff21272a,0xff464e52));
+            background.addState(new int[]{android.R.attr.state_focused},buttonBackground(0xff24383e,ACCENT));
+            background.addState(new int[]{android.R.attr.state_pressed},buttonBackground(0xff294148,Color.TRANSPARENT));
+            background.addState(new int[]{},buttonBackground(SURFACE,Color.TRANSPARENT));
             HomeDashboard.Card card=new HomeDashboard.Card(this,labels[i],icons[i],background,()->{
                 dashboardFocusKind=kind;if(kind.equals("settings"))showAppSettings();else switchSource(kind);
             });
@@ -488,12 +534,18 @@ public final class MainActivity extends Activity {
         localTree=null;localParents.clear();currentUrl=null;focusedUrl=null;entries=new ArrayList<>();subtitlesInFolder=new ArrayList<>();
         LinearLayout page=column();pageRoot=page;addSourceNavigation(page,kind);
         LinearLayout actions=new LinearLayout(this);
-        Button add=iconButton("plus","添加",()->{if("local".equals(kind))pickDocument(Intent.ACTION_OPEN_DOCUMENT_TREE,10);else editHomeSource(kind,null);});
-        add.setContentDescription("local".equals(kind)?"添加文件夹":"添加 SMB 服务器");actions.addView(add);actions.addView(iconButton("lock","隐私列表",()->withPin(this::showPrivateIndex)));moduleHeading.addView(actions);
+        Button add=iconButton("plus","local".equals(kind)?"添加文件夹":"添加 SMB 服务器",
+                ()->{if("local".equals(kind))pickDocument(Intent.ACTION_OPEN_DOCUMENT_TREE,10);else editHomeSource(kind,null);});
+        actions.addView(add);
+        actions.addView(privacyButton());
+        attachModuleActions(actions);
         org.json.JSONArray all=homeSources();List<org.json.JSONObject> items=new ArrayList<>();
         java.util.Set<String> marks=privateLibrary.marks();
         for(int i=0;i<all.length();i++){org.json.JSONObject item=all.optJSONObject(i);if(item!=null&&kind.equals(item.optString("kind"))&&!privateLibrary.hidden(sourcePrivacyKey(item),marks))items.add(item);}
-        TextView hint=text(message.isEmpty()?items.isEmpty()?"尚未添加"+("local".equals(kind)?"文件夹":"来源")+"，请选择右上角添加。":"已添加 "+items.size()+" 项 · 长按管理":message,20);hint.setTextColor(SECONDARY);hint.setPadding(0,0,0,dp(14));page.addView(hint);
+        if(!message.isEmpty()||items.isEmpty()){
+            TextView hint=text(message.isEmpty()?"暂无来源":message,20);
+            hint.setTextColor(SECONDARY);page.addView(hint);
+        }
         ScrollView scroll=new ScrollView(this);scroll.setFocusable(false);LinearLayout rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);scroll.addView(rows);page.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         List<Button> buttons=new ArrayList<>();View preferred=add;
         for(org.json.JSONObject item:items) {
@@ -511,7 +563,10 @@ public final class MainActivity extends Activity {
         }
         setContentView(page);finishPage(preferred,actions);
         for(int i=0;i<buttons.size();i++){Button row=buttons.get(i);row.setNextFocusLeftId(row.getId());row.setNextFocusRightId(row.getId());row.setNextFocusUpId(i==0?add.getId():buttons.get(i-1).getId());row.setNextFocusDownId(buttons.get(Math.min(i+1,buttons.size()-1)).getId());}
-        if(!buttons.isEmpty()){add.setNextFocusDownId(buttons.get(0).getId());sourceTabs.get(kind).setNextFocusDownId(buttons.get(0).getId());}
+        if(!buttons.isEmpty()){
+            for(View action:interactiveChildren(actions))action.setNextFocusDownId(buttons.get(0).getId());
+            sourceTabs.get(kind).setNextFocusDownId(buttons.get(0).getId());
+        }
     }
 
     private org.json.JSONArray homeSources() {
@@ -578,20 +633,24 @@ public final class MainActivity extends Activity {
         } catch (RuntimeException invalid) { showHome("local", "文件夹授权已失效，请重新选择。"); }
     }
 
-    private void manageHomeSource(org.json.JSONObject item) {
-        showItems(item.optString("name"),new String[]{"移入隐私列表","管理来源"},choice->{
-            if(choice==0)withPin(()->{
-                markPrivate(sourcePrivacyKey(item), item.optString("name"), item.optString("url"), true, item.optString("id"));
-                showHome(item.optString("kind"),"已移入隐私列表");
-            });
-            else manageSourceSettings(item);
+    private void hideSource(org.json.JSONObject item) {
+        withPin(() -> {
+            markPrivate(sourcePrivacyKey(item), item.optString("name"), item.optString("url"), true, item.optString("id"));
+            showHome(item.optString("kind"), "已移入隐私列表");
         });
     }
 
-    private void manageSourceSettings(org.json.JSONObject item) {
-        if("local".equals(item.optString("kind"))) {showItems(item.optString("name"),new String[]{"移除文件夹"},index->removeSource(item));return;}
-        showItems(item.optString("name"), new String[] {"编辑", "复制为新来源", "删除"}, choice -> {
+    private void manageHomeSource(org.json.JSONObject item) {
+        if ("local".equals(item.optString("kind"))) {
+            showItems(item.optString("name"), new String[]{"移除文件夹", "移入隐私列表"}, choice -> {
+                if (choice == 0) removeSource(item);
+                else hideSource(item);
+            });
+            return;
+        }
+        showItems(item.optString("name"), new String[]{"编辑", "复制为新来源", "删除来源", "移入隐私列表"}, choice -> {
             if (choice == 0) editHomeSource(item.optString("kind"), item);
+            else if (choice == 3) hideSource(item);
             else if (choice == 1) {
                 try {
                     org.json.JSONObject copy = new org.json.JSONObject(item.toString());
@@ -863,13 +922,25 @@ public final class MainActivity extends Activity {
     private void addSourceNavigation(LinearLayout page,String active) {
         sourceTabs.clear(); moduleHeading=new LinearLayout(this);moduleHeading.setGravity(Gravity.CENTER_VERTICAL);
         Button back=iconButton("back","返回",this::onBackPressed);sourceTabs.put(active,back);
-        moduleHeading.addView(back,new LinearLayout.LayoutParams(-2,dp(52)));
+        moduleHeading.addView(back);
         String label="local".equals(active)?"本地存储":"nas".equals(active)?"SMB 网络":"SMB 网络";
         if(browsing){if(playlistSource)label=playlistTitle;else if(currentUrl!=null){String known=folderLabels.get(currentUrl);if(known!=null)label=known;else {String path=Uri.parse(currentUrl).getPath();if(path!=null){path=path.replaceAll("/+$","");int split=Math.max(path.lastIndexOf('/'),path.lastIndexOf(':'));label=path.substring(split+1);}}}}
         if(privateMode)label=privateIndex?"隐私列表":"私密目录";
         TextView title=text(label,30);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(0,-2,1);titleParams.setMargins(dp(18),0,dp(20),0);moduleHeading.addView(title,titleParams);
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(14);page.addView(moduleHeading,lp);
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
+        lp.bottomMargin=dp(14);
+        page.addView(moduleHeading,lp);
+    }
+
+    private Button privacyButton(){
+        return iconButton("lock","隐私列表",()->withPin(this::showPrivateIndex));
+    }
+
+    private void attachModuleActions(LinearLayout actions){
+        for(int i=1;i<actions.getChildCount();i++)
+            ((LinearLayout.LayoutParams)actions.getChildAt(i).getLayoutParams()).setMarginStart(dp(8));
+        moduleHeading.addView(actions);
     }
 
     private void switchSource(String kind) { showHome(kind, ""); }
@@ -892,7 +963,7 @@ public final class MainActivity extends Activity {
         pagePreferredFocus=content;List<View> top=new ArrayList<>(sourceTabs.values());top.addAll(interactiveChildren(actions));
         for(int i=0;i<top.size();i++) {View action=top.get(i);action.setNextFocusLeftId(top.get(Math.max(0,i-1)).getId());action.setNextFocusRightId(top.get(Math.min(top.size()-1,i+1)).getId());action.setNextFocusUpId(action.getId());
             action.setNextFocusDownId(top.contains(content)?action.getId():content.getId());
-            if(content instanceof android.widget.AbsListView)action.setOnKeyListener((v,key,event)->{if(key!=KeyEvent.KEYCODE_DPAD_DOWN)return false;if(event.getAction()==KeyEvent.ACTION_DOWN){content.requestFocusFromTouch();((android.widget.AbsListView)content).setSelection(0);}return true;});
+            if(content instanceof android.widget.AbsListView)action.setOnKeyListener((v,key,event)->{if(key!=KeyEvent.KEYCODE_DPAD_DOWN)return false;if(event.getAction()==KeyEvent.ACTION_DOWN){content.requestFocusFromTouch();android.widget.AbsListView list=(android.widget.AbsListView)content;if(list.getSelectedItemPosition()<0)list.setSelection(0);}return true;});
         }
         View preferred=content;if(browserActionFocus!=null)for(View v:top)if(browserActionFocus.equals(v.getTag()))preferred=v;browserActionFocus=null;
         if(preferred!=null)preferred.requestFocusFromTouch();buildingPage=false;View rendered=pageRoot;content.post(()->{if(!playing&&rendered==pageRoot)repairMainFocus();});
@@ -923,24 +994,40 @@ public final class MainActivity extends Activity {
     private void renderBrowser(String message,boolean showEntries) {
         beginPage();if(!playing){previewsPaused=false;((PlaybackPreferences)settings).end();}
         LinearLayout page=column();pageRoot=page;addSourceNavigation(page,sourceKind);
-        LinearLayout actions=new LinearLayout(this);moduleHeading.addView(actions);
+        LinearLayout actions=new LinearLayout(this);
         if(showEntries) {
             actions.addView(iconButton("filter","筛选媒体",this::chooseMediaFilter));
-            if(!privateMode)actions.addView(iconButton("lock","隐私列表",()->withPin(this::showPrivateIndex)));
             Button sort=iconButton("sort","排序",this::showBrowserSort);sort.setTag("sort");actions.addView(sort);
-            Button view=iconButton("grid","视图",()->showChoices("视图",new String[]{"列表","网格"},settings.getBoolean("gridView",false)?1:0,i->{rememberBrowserScroll();settings.edit().putBoolean("gridView",i==1).apply();browserActionFocus="view";renderBrowser("",true);}));view.setTag("view");actions.addView(view);
+            boolean grid = settings.getBoolean("gridView", false);
+            Button view = iconButton(grid ? "list" : "grid", grid ? "切换列表" : "切换网格", () -> {
+                rememberBrowserScroll();
+                settings.edit().putBoolean("gridView", !grid).apply();
+                browserActionFocus = "view";
+                renderBrowser("", true);
+            });
+            view.setTag("view");
+            actions.addView(view);
         }
-        spaceActions(actions);
+        if(!privateMode)actions.addView(privacyButton());
+        attachModuleActions(actions);
         String path=browserLocation();
-        TextView location=text("位置："+(path==null?"":path),20);location.setTextColor(SECONDARY);location.setSingleLine(true);location.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);location.setPadding(0,0,0,dp(14));page.addView(location);
-        if(!message.isEmpty()){TextView hint=text(message,22);hint.setPadding(0,0,0,dp(12));page.addView(hint);}
+        if(path!=null&&!path.isEmpty()){
+            TextView location=text("位置："+path,20);
+            location.setTextColor(SECONDARY);location.setSingleLine(true);
+            location.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+            location.setPadding(dp(2),dp(3),dp(2),dp(7));
+            LinearLayout.LayoutParams locationSpace=new LinearLayout.LayoutParams(-1,-2);
+            locationSpace.bottomMargin=dp(14);
+            page.addView(location,locationSpace);
+        }
+        if(showEntries&&!message.isEmpty()){TextView hint=text(message,22);hint.setPadding(0,0,0,dp(12));page.addView(hint);}
         setContentView(page);
         if(!showEntries) {
             android.widget.ProgressBar loading=new android.widget.ProgressBar(this);loading.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));page.addView(loading,new LinearLayout.LayoutParams(dp(48),dp(48)));finishPage(sourceTabs.get(sourceKind),actions);return;
         }
         if(handlePrivateTarget())return;
-        if(visibleEntries().isEmpty()){page.addView(text("此筛选下没有可显示的媒体",20));finishPage(actions.getChildAt(0),actions);return;}
-        if(mediaFilter==1||settings.getBoolean("gridView",false))showGrid(page,actions);else showFileList(page,actions);
+        if(visibleEntries().isEmpty()){page.addView(text("暂无内容",20));finishPage(actions.getChildAt(0),actions);return;}
+        if(settings.getBoolean("gridView",false))showGrid(page,actions);else showFileList(page,actions);
     }
 
     private String browserLocation(){
@@ -971,6 +1058,14 @@ public final class MainActivity extends Activity {
         Object item=fileView.getItemAtPosition(selected);if(item instanceof Entry&&child!=null)fileScroll.put(browserKey(),new ScrollAnchor(((Entry)item).url,child.getTop()));
     }
 
+    void styleListFocus(android.widget.AbsListView view,int fill){
+        android.graphics.drawable.StateListDrawable selector=new android.graphics.drawable.StateListDrawable();
+        selector.addState(new int[]{android.R.attr.state_pressed},buttonBackground(fill,ACCENT));
+        selector.addState(new int[]{android.R.attr.state_focused},buttonBackground(fill,ACCENT));
+        selector.addState(new int[]{},new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        view.setSelector(selector);
+    }
+
     private void showFileList(LinearLayout page, LinearLayout actions) {
         List<Entry> items = visibleEntries();
         android.widget.ListView list = new android.widget.ListView(this);
@@ -979,7 +1074,7 @@ public final class MainActivity extends Activity {
         list.setId(View.generateViewId());
         list.setDivider(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
         list.setDividerHeight(dp(10));
-        list.setSelector(buttonBackground(0x2268c9dd, ACCENT));
+        styleListFocus(list,0x2268c9dd);
         list.setDrawSelectorOnTop(true);
         list.setItemsCanFocus(false);
         list.setAdapter(new android.widget.BaseAdapter() {
@@ -1031,6 +1126,8 @@ public final class MainActivity extends Activity {
         if(entry.folder)folderLabels.put(entry.url,entry.name);
         if(!entry.folder && mediaType(entry.name)>=2){
             previewsPaused=true;metadataGeneration++;
+            ((java.util.concurrent.ThreadPoolExecutor) previews).getQueue().clear();
+            if(activePreviewSource!=null)activePreviewSource.cancel();
             List<Entry> queue=new ArrayList<>();
             int type=mediaType(entry.name);
             for(Entry candidate:visibleEntries())if(!candidate.folder&&mediaType(candidate.name)==type)queue.add(candidate);
@@ -1072,7 +1169,7 @@ public final class MainActivity extends Activity {
         grid.setHorizontalSpacing(dp(12));
         grid.setVerticalSpacing(dp(12));
         grid.setStretchMode(android.widget.GridView.STRETCH_COLUMN_WIDTH);
-        grid.setSelector(buttonBackground(Color.TRANSPARENT, ACCENT));
+        styleListFocus(grid,Color.TRANSPARENT);
         grid.setDrawSelectorOnTop(true);
         grid.setClipChildren(false);
         grid.setAdapter(new android.widget.BaseAdapter() {
@@ -1128,11 +1225,11 @@ public final class MainActivity extends Activity {
     private final class MediaTile extends LinearLayout {
         private final android.widget.ImageView image;
         private final TextView name;
-        private final TextView duration;
-        private final android.widget.ImageView folderGlyph;
+        private final android.widget.ImageView folderGlyph, mediaGlyph;
         private final TextView fileDetails;
         private final boolean listMode;
         private volatile String boundUrl;
+        private String details, modifiedLabel, sizeLabel;
 
         MediaTile() { this(false); }
 
@@ -1141,55 +1238,43 @@ public final class MainActivity extends Activity {
             listMode = listRow;
             setOrientation(listRow ? HORIZONTAL : VERTICAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(2), dp(2), dp(2), dp(2));
-            setBackground(buttonBackground(0xff212121, 0xff464646));
+            setPadding(dp(8),dp(6),dp(8),dp(6));
+            setBackground(buttonBackground(SURFACE,Color.TRANSPARENT));
             FrameLayout poster = new FrameLayout(MainActivity.this);
-            int posterHeight = listRow ? 90 : Math.max(64, Math.min(172, getResources().getConfiguration().screenHeightDp - 320));
-            addView(poster, new LinearLayout.LayoutParams(listRow ? dp(144) : -1, dp(posterHeight)));
+            poster.setBackground(buttonBackground(0xff11181b,Color.TRANSPARENT));
+            poster.setClipToOutline(true);
+            int posterHeight = listRow ? 62 : Math.max(64, Math.min(160, getResources().getConfiguration().screenHeightDp - 320));
+            addView(poster,new LinearLayout.LayoutParams(listRow?dp(102):-1,dp(posterHeight)));
             image = new android.widget.ImageView(MainActivity.this);
             image.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
             poster.addView(image, new FrameLayout.LayoutParams(-1, -1));
+            mediaGlyph=new android.widget.ImageView(MainActivity.this);
+            mediaGlyph.setAlpha(.72f);
+            mediaGlyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            int glyphSize=dp(listRow?32:38);
+            poster.addView(mediaGlyph,new FrameLayout.LayoutParams(glyphSize,glyphSize,Gravity.CENTER));
             folderGlyph = new android.widget.ImageView(MainActivity.this);
             folderGlyph.setImageResource(R.drawable.ic_folder);
             folderGlyph.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
             folderGlyph.setContentDescription("文件夹");
-            int folderIconSize = listRow ? 64 : Math.min(80, posterHeight - 8);
+            int folderIconSize = listRow ? 45 : Math.min(72, posterHeight - 8);
             poster.addView(folderGlyph, new FrameLayout.LayoutParams(dp(folderIconSize), dp(folderIconSize), Gravity.CENTER));
             LinearLayout captions = new LinearLayout(MainActivity.this);
             captions.setOrientation(VERTICAL);
-            captions.setPadding(dp(10), dp(listRow ? 5 : 0), dp(10), dp(listRow ? 6 : 0));
-            captions.setBackgroundColor(0xc9121212);
+            captions.setPadding(dp(listRow ? 16 : 10),dp(listRow ? 5 : 6),dp(10),dp(6));
             if (listRow) addView(captions, new LinearLayout.LayoutParams(0, -2, 1));
             else addView(captions, new LinearLayout.LayoutParams(-1, -2));
-            name = text("", 24);
+            name = text("",listRow?23:20);
             name.setSingleLine();
             name.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
             name.setEllipsize(android.text.TextUtils.TruncateAt.END);
             captions.addView(name);
-            duration = text("", 20);
-            duration.setSingleLine();
-            duration.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            duration.setTextColor(SECONDARY);
-            captions.addView(duration);
             fileDetails = text("", 20); fileDetails.setTextColor(SECONDARY);
+            fileDetails.setPadding(0,dp(3),0,0);
             fileDetails.setSingleLine(listRow); fileDetails.setMaxLines(listRow ? 1 : 2);
             fileDetails.setMinLines(listRow ? 1 : 2);
             fileDetails.setEllipsize(android.text.TextUtils.TruncateAt.END);
             captions.addView(fileDetails);
-        }
-
-        @Override public void setSelected(boolean selected) {
-            boolean changed = isSelected() != selected;
-            super.setSelected(selected);
-            if (!changed) return;
-            animate().cancel();
-            boolean animated = false;
-            float scale = animated && selected ? 1.025f : 1f;
-            if (animated) animate().scaleX(scale).scaleY(scale).setDuration(220).start();
-            else {
-                setScaleX(1f);
-                setScaleY(1f);
-            }
         }
 
         void bind(Entry entry) {
@@ -1197,17 +1282,18 @@ public final class MainActivity extends Activity {
             name.setText(entry.name);
             folderGlyph.setVisibility(entry.folder ? View.VISIBLE : View.GONE);
             image.setVisibility(entry.folder ? View.GONE : View.VISIBLE);
-            fileDetails.setVisibility(entry.folder ? listMode ? View.GONE : View.INVISIBLE : View.VISIBLE);
-            fileDetails.setText(listMode ? FileDisplay.details(entry.modified, entry.size)
-                    : FileDisplay.modified(entry.modified) + "\n" + FileDisplay.size(entry.size));
-            fileDetails.setContentDescription("修改时间：" + FileDisplay.modified(entry.modified) + "；文件大小：" + FileDisplay.size(entry.size));
-            duration.setText(entry.folder ? "目录" : isPlaylist(entry.name) && !playlistSource ? "播放列表"
-                    : entry.duration > 0 ? time(entry.duration) : mediaType(entry.name)==2?"图片":mediaType(entry.name)==3?"音乐":"视频");
+            fileDetails.setVisibility(listMode&&!entry.folder?View.VISIBLE:View.GONE);
+            details=FileDisplay.details(entry.modified,entry.size);
+            modifiedLabel=FileDisplay.modified(entry.modified);
+            sizeLabel=FileDisplay.size(entry.size);
+            showDetails(entry.duration);
             image.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
-            image.setImageResource(R.drawable.ic_stream);
+            image.setImageDrawable(null);
             int kind=mediaType(entry.name);
+            mediaGlyph.setVisibility(entry.folder?View.GONE:View.VISIBLE);
+            mediaGlyph.setImageDrawable(new ActionIcon(isPlaylist(entry.name)&&!playlistSource?"list"
+                    :kind==2?"photo":kind==3?"music":"play"));
             if(!entry.folder && kind>=2){
-                image.setImageDrawable(new ActionIcon(kind==2?"photo":"music"));
                 if(kind==2 && !previewsPaused){
                     Preview cached=previewCache.get(entry.url);
                     if(cached!=null){applyPreview(cached);return;}
@@ -1254,8 +1340,17 @@ public final class MainActivity extends Activity {
             if (preview.image != null) {
                 image.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
                 image.setImageBitmap(preview.image);
+                mediaGlyph.setVisibility(View.GONE);
             }
-            if (preview.duration > 0) duration.setText(time(preview.duration));
+            if(preview.duration>0)showDetails(preview.duration);
+        }
+
+        private void showDetails(long duration){
+            String length=duration>0?time(duration):"";
+            String prefix=length.isEmpty()?"":length+"   ·   ";
+            fileDetails.setText(listMode?prefix+details:modifiedLabel+"\n"+prefix+sizeLabel);
+            fileDetails.setContentDescription((length.isEmpty()?"":"时长："+length+"；")
+                    +"修改时间："+modifiedLabel+"；文件大小："+sizeLabel);
         }
     }
 
@@ -1337,6 +1432,7 @@ public final class MainActivity extends Activity {
     private void openVideo(Entry entry, boolean direct, boolean softwareRetry) {
         ((PlaybackPreferences) settings).begin(entry.url);
         if(playbackLoop<0)playbackLoop=Math.floorMod(settings.getInt("loop",0),3);
+        if(MusicPlaybackService.current!=null)MusicPlaybackService.current.stopPlayback();
         playing = true;
         keepControlsHidden = startWithChromeHidden;
         startWithChromeHidden = false;
@@ -1369,16 +1465,17 @@ public final class MainActivity extends Activity {
         video.setDescendantFocusability(android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         controls = column();
         controlsShown = !keepControlsHidden;
-        controls.setPadding(dp(24), dp(4), dp(24), dp(8));
-        controls.setBackgroundColor(0xd1121212);
-        TextView title = text(entry.name, 32);
+        controls.setBackground(playbackScrim(false));
+        controls.setPadding(dp(24),dp(18),dp(24),dp(12));
+        TextView title = text(entry.name,28);
+        title.setShadowLayer(dp(4),0,dp(1),Color.BLACK);
         title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         title.setSingleLine();
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(24), dp(8), dp(24), dp(8));
-        header.setBackgroundColor(0xcc121212);
+        header.setBackground(playbackScrim(true));
+        header.setPadding(dp(24),dp(12),dp(24),dp(14));
 
         LinearLayout.LayoutParams titleSpace = new LinearLayout.LayoutParams(0, -2, 1);
         titleSpace.setMargins(dp(16), 0, 0, 0);
@@ -1389,23 +1486,21 @@ public final class MainActivity extends Activity {
         loadingOverlay = new LinearLayout(this);
         loadingOverlay.setOrientation(LinearLayout.VERTICAL);
         loadingOverlay.setGravity(Gravity.CENTER);
-        loadingOverlay.setBackground(buttonBackground(0xd1181818, 0xff464646));
-        loadingOverlay.setPadding(dp(28), dp(20), dp(28), dp(20));
         android.widget.ProgressBar spinner = new android.widget.ProgressBar(this);
         loadingOverlay.addView(spinner, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        loadingText = text("正在缓冲", 24);
-        loadingText.setGravity(Gravity.CENTER);
-        loadingText.setSingleLine(false);
-        loadingText.setEllipsize(null);
-        LinearLayout.LayoutParams loadingLabel = new LinearLayout.LayoutParams(-1, -2);
-        loadingLabel.topMargin = dp(12);
-        loadingOverlay.addView(loadingText, loadingLabel);
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        spinner.setContentDescription("正在缓冲");
+        loadingRate=text("",22);
+        loadingRate.setGravity(Gravity.CENTER);
+        loadingRate.setShadowLayer(dp(4),0,dp(1),Color.BLACK);
+        loadingOverlay.addView(loadingRate,new LinearLayout.LayoutParams(-2,-2));
+        loadingRate.setVisibility(isNetworkMedia(entry.url)||entry.url.startsWith("smb://")?View.VISIBLE:View.GONE);
         frame.addView(loadingOverlay, new FrameLayout.LayoutParams(
-                Math.min(dp(440), getResources().getDisplayMetrics().widthPixels - dp(48)), -2, Gravity.CENTER));
+                -2, -2, Gravity.CENTER));
         playbackNotice = text("", 26);
         playbackNotice.setVisibility(View.GONE);
         playbackNotice.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        playbackNotice.setBackground(buttonBackground(0xd1181818, 0xff464646));
+        playbackNotice.setShadowLayer(dp(4),0,dp(1),Color.BLACK);
         playbackNotice.setPadding(dp(18), dp(10), dp(18), dp(10));
         FrameLayout.LayoutParams noticePosition = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
         frame.addView(playbackNotice, noticePosition);
@@ -1459,7 +1554,8 @@ public final class MainActivity extends Activity {
         timeline.setContentDescription("播放进度");
         timeline.setEnabled(false);
         playbackStatus = text("— / —", 20);
-        playbackStatus.setTextColor(SECONDARY);
+        playbackStatus.setShadowLayer(dp(3),0,dp(1),Color.BLACK);
+        playbackStatus.setTextColor(0xfff1f5f6);
         controls.addView(playbackStatus);
         controls.addView(timeline, new LinearLayout.LayoutParams(-1, dp(48)));
         timeline.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -1469,7 +1565,7 @@ public final class MainActivity extends Activity {
                 if(prepared&&dragResumeDesired){gateAudio(player);player.pause();}
                 ui.removeCallbacks(applySeek); pendingSeek = -1;
                 dragging = true;
-                ui.removeCallbacks(hideControls);
+                ui.removeCallbacks(autoHideControls);
             }
 
             @Override public void onStopTrackingTouch(SeekBar bar) {
@@ -1495,25 +1591,25 @@ public final class MainActivity extends Activity {
             }
         });
         LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setGravity(Gravity.CENTER);
         android.widget.HorizontalScrollView controlScroll = new android.widget.HorizontalScrollView(this);
-        controlScroll.setFocusable(false); controlScroll.setHorizontalScrollBarEnabled(false);
+        controlScroll.setFocusable(false); controlScroll.setHorizontalScrollBarEnabled(false);controlScroll.setFillViewport(true);
         controlScroll.addView(row); controls.addView(controlScroll);
         pause = iconButton("pause","暂停", this::togglePlayback);
         setPlaybackButton(true);
         playlist = iconButton("list","选集", this::showPlaylist);
         more = iconButton("more","更多", this::showPlaybackOptions);
         aspectButton = iconButton("fit","比例", this::showAspectOptions);
-        speedButton = button(speedLabel(), this::showSpeed);
-        for (Button action : new Button[] {pause, playlist, aspectButton, speedButton, more}) {
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(Math.max(dp(80), (getResources().getDisplayMetrics().widthPixels - dp(88)) / 5), dp(54));
-            params.setMargins(dp(4), dp(2), dp(4), 0);
-            if(action==speedButton){action.setTextSize(20);action.setPadding(dp(4),dp(4),dp(4),dp(4));}
-            row.addView(action, params);
+        speedButton = iconButton("speed",speedLabel(), this::showSpeed);
+        pipButton=iconButton("pip","画中画",this::enterVideoPip);
+        for (Button action : videoButtons()) {
+            LinearLayout.LayoutParams params=(LinearLayout.LayoutParams)action.getLayoutParams();
+            params.setMargins(dp(4),dp(2),dp(4),0);
+            row.addView(action);
         }
         frame.addView(controls, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         loadingOverlay.bringToFront();
-        downloadRate.reset();rateSource=null;networkRate=0;nativeReadEpoch=lastNativeBytes=0;
+        downloadRate.reset();rateSource=null;
         loadingDue=0;ui.removeCallbacks(loadingTick);ui.post(loadingTick);
         timeline.setId(View.generateViewId());
         timeline.setNextFocusUpId(playerBack.getId());
@@ -1521,10 +1617,10 @@ public final class MainActivity extends Activity {
         playerBack.setNextFocusLeftId(playerBack.getId()); playerBack.setNextFocusRightId(playerBack.getId());
         timeline.setNextFocusLeftId(timeline.getId()); timeline.setNextFocusRightId(timeline.getId());
         timeline.setNextFocusDownId(pause.getId());
-        for (Button action : new Button[] {pause, playlist, aspectButton, speedButton, more}) {
+        for (Button action : videoButtons()) {
             action.setNextFocusUpId(timeline.getId());
         }
-        Button[] playbackButtons={pause,playlist,aspectButton,speedButton,more};
+        Button[] playbackButtons=videoButtons();
         for(int i=0;i<playbackButtons.length;i++) {
             Button action=playbackButtons[i];action.setNextFocusLeftId(playbackButtons[Math.max(0,i-1)].getId());action.setNextFocusRightId(playbackButtons[Math.min(playbackButtons.length-1,i+1)].getId());action.setNextFocusDownId(action.getId());
         }
@@ -1545,7 +1641,6 @@ public final class MainActivity extends Activity {
                 long bytes = playbackServer.streamedRemoteBytes();
                 if (bytes > lastOpeningRead[0]) {
                     lastOpeningRead[0] = bytes;
-                    loadingText.setText(bufferingLabel());
                     ui.postDelayed(openingTimeout, 5000);
                     return;
                 }
@@ -1759,17 +1854,25 @@ public final class MainActivity extends Activity {
         try { return media.getStats(); } finally { media.release(); }
     }
 
-    private String bufferingLabel(){
-        boolean remote=playingEntry!=null&&(playingEntry.url.startsWith("smb://")||isNetworkMedia(playingEntry.url));
-        return remote?"正在缓冲 · "+DownloadRate.format(networkRate):"正在缓冲";
-    }
-    private void updateNetworkRate(){
-        Object source=playbackServer!=null?playbackServer:player;long bytes=0;
-        if(source!=rateSource){rateSource=source;downloadRate.reset();nativeReadEpoch=lastNativeBytes=0;}
+    private void updateBufferingRate(){
+        Object source=playbackServer!=null?playbackServer:player;
+        if(source!=rateSource){
+            rateSource=source;downloadRate.reset();nativeReadEpoch=lastNativeBytes=0;
+        }
+        if(loadingRate==null||loadingRate.getVisibility()!=View.VISIBLE)return;
+        long bytes=0;
         if(playbackServer!=null)bytes=playbackServer.streamedRemoteBytes();
-        else if(prepared&&player!=null){org.videolan.libvlc.interfaces.IMedia.Stats stats=videoStats(player);if(stats!=null){long current=Integer.toUnsignedLong(stats.readBytes);if(current<lastNativeBytes&&lastNativeBytes-current>0x80000000L)nativeReadEpoch+=0x100000000L;lastNativeBytes=current;bytes=nativeReadEpoch+current;}}
-        networkRate=downloadRate.sample(bytes,android.os.SystemClock.elapsedRealtime());
+        else if(player!=null){
+            org.videolan.libvlc.interfaces.IMedia.Stats stats=videoStats(player);
+            if(stats!=null){
+                long current=Integer.toUnsignedLong(stats.readBytes);
+                if(current<lastNativeBytes)nativeReadEpoch+=0x100000000L;
+                lastNativeBytes=current;bytes=nativeReadEpoch+current;
+            }
+        }
+        loadingRate.setText(DownloadRate.format(downloadRate.sample(bytes,android.os.SystemClock.elapsedRealtime())));
     }
+
     private void gateAudio(MediaPlayer opened){
         if(gatedPlayer==opened){if(digitalOutput&&opened.getAudioTrack()>=0){if(gatedTrack==Integer.MIN_VALUE)gatedTrack=opened.getAudioTrack();opened.setAudioTrack(-1);}return;}
         gatedPlayer=opened;gatedVolume=opened.getVolume();if(gatedVolume<=0)gatedVolume=100;gatedTrack=Integer.MIN_VALUE;
@@ -1782,9 +1885,9 @@ public final class MainActivity extends Activity {
         if(owner!=null&&owner==player){if(track!=Integer.MIN_VALUE)owner.setAudioTrack(track);if(volume>=0)owner.setVolume(volume);}
     }
     private void showBuffering(boolean delayed){
-        boolean wasWaiting=buffering;buffering=true;ui.removeCallbacks(hideControls);
+        boolean wasWaiting=buffering;buffering=true;ui.removeCallbacks(autoHideControls);
         if(!wasWaiting)loadingDue=android.os.SystemClock.elapsedRealtime()+(delayed?350:0);
-        if(!delayed){loadingDue=0;loadingText.setText(bufferingLabel());loadingOverlay.setVisibility(View.VISIBLE);}
+        if(!delayed){loadingDue=0;loadingOverlay.setVisibility(View.VISIBLE);}
     }
     private void beginFrameCheck(long target,boolean delayed){
         if(!prepared||player==null||pauseRequested)return;
@@ -2017,12 +2120,9 @@ public final class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(6), dp(12), dp(16));
         LinearLayout toolbar = new LinearLayout(this);
-        Button loop = button(loopLabel(), () -> {});
-        Button[] tools = {loop};
-        for (int i = 0; i < tools.length; i++) {
-            tools[i].setMinWidth(0); tools[i].setMinimumWidth(0);
-            toolbar.addView(tools[i], new LinearLayout.LayoutParams(0, dp(56), i == 0 ? 1.5f : i == 1 ? 1.5f : 1f));
-        }
+        Button loop = iconButton(loopIcon(),loopLabel(), () -> {});
+        toolbar.setGravity(Gravity.END);
+        toolbar.addView(loop);
         spaceActions(toolbar); panel.addView(toolbar);
         android.widget.ListView list = new android.widget.ListView(this);
         list.setId(View.generateViewId()); list.setFocusableInTouchMode(true);
@@ -2079,21 +2179,17 @@ public final class MainActivity extends Activity {
         list.setOnItemClickListener((parent, view, position, id) -> {
             Entry entry = videos.get(position); playlistPanel.dismiss(); playEntry(entry);
         });
-        View[] lastTool = {loop};
-        for (int i = 0; i < tools.length; i++) {
-            Button tool = tools[i]; View.OnFocusChangeListener visual = tool.getOnFocusChangeListener();
-            tool.setOnFocusChangeListener((view, focused) -> { if (visual != null) visual.onFocusChange(view, focused); if (focused) lastTool[0] = view; });
-            tool.setNextFocusLeftId(tools[Math.max(0, i - 1)].getId());
-            tool.setNextFocusRightId(tools[Math.min(tools.length - 1, i + 1)].getId());
-            tool.setNextFocusUpId(tool.getId()); tool.setNextFocusDownId(videos.isEmpty() ? tool.getId() : list.getId());
-        }
+        loop.setNextFocusLeftId(loop.getId());
+        loop.setNextFocusRightId(loop.getId());
+        loop.setNextFocusUpId(loop.getId());
+        loop.setNextFocusDownId(videos.isEmpty()?loop.getId():list.getId());
         loop.setContentDescription("循环模式：" + loopLabel());
-        loop.setOnClickListener(view -> { showLoopOptions(); loop.setText(loopLabel()); loop.setContentDescription("循环模式：" + loopLabel()); });
+        loop.setOnClickListener(view -> { showLoopOptions(); updateIcon(loop,loopIcon(),loopLabel()); });
         list.setOnKeyListener((view, key, event) -> {
             boolean up = key == KeyEvent.KEYCODE_DPAD_UP && list.getSelectedItemPosition() <= 0;
             boolean edge = key == KeyEvent.KEYCODE_DPAD_DOWN && list.getSelectedItemPosition() >= videos.size() - 1
                     || key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT;
-            if (up && event.getAction() == KeyEvent.ACTION_DOWN) lastTool[0].requestFocusFromTouch();
+            if (up && event.getAction() == KeyEvent.ACTION_DOWN) loop.requestFocusFromTouch();
             return up || edge;
         });
         list.setNextFocusUpId(loop.getId()); list.setNextFocusDownId(list.getId());
@@ -2120,16 +2216,23 @@ public final class MainActivity extends Activity {
     }
 
     private void updateQueueButtons() {
-        if(pause==null || playlist==null || aspectButton==null || speedButton==null || more==null)return;
-        Button[] buttons={pause,playlist,aspectButton,speedButton,more};
+        if(pause==null||playlist==null||aspectButton==null||speedButton==null||pipButton==null||more==null)return;
+        Button[] buttons=videoButtons();
         for(int i=0;i<buttons.length;i++) {Button b=buttons[i];b.setNextFocusLeftId(buttons[Math.max(0,i-1)].getId());b.setNextFocusRightId(buttons[Math.min(buttons.length-1,i+1)].getId());b.setNextFocusDownId(b.getId());}
+    }
+
+    private Button[] videoButtons(){
+        return supportsPip()?new Button[]{pause,playlist,aspectButton,speedButton,pipButton,more}
+                :new Button[]{pause,playlist,aspectButton,speedButton,more};
     }
 
     private String loopLabel(){return new String[]{"顺序播放","单集循环","列表循环"}[playing?Math.max(0,playbackLoop):Math.floorMod(settings.getInt("loop",0),3)];}
 
-    private void showLoopOptions(){playbackLoop=(Math.max(0,playbackLoop)+1)%3;flashNotice(loopLabel());}
+    private String loopIcon(){return new String[]{"sequence","repeatOne","repeat"}[Math.max(0,playbackLoop)];}
 
-    private int seekStep() {
+    private void showLoopOptions(){playbackLoop=(Math.max(0,playbackLoop)+1)%3;}
+
+    int seekStep() {
         return settings.getInt("seekStep", 10) * 1000;
     }
 
@@ -2151,7 +2254,7 @@ public final class MainActivity extends Activity {
                 case 2:showSubtitleSize();break;
                 case 3:showChoices("播放结束",new String[]{"顺序播放","单集循环","列表循环"},Math.floorMod(settings.getInt("loop",0),3),i->settings.edit().putInt("loop",i).apply());break;
                 case 4:showCompatibilitySettings();break;
-                case 5:showSettingsInfo("关于","smbplayer 1.0.0 · 32 位 ARM\n\nLibVLC 3.6.5 · jcifs-ng 2.1.10 · NanoHTTPD 2.3.1\n使用的开源组件按各自许可证分发。");break;
+                case 5:showSettingsInfo("关于","smbplayer 1.2.1");break;
                 default:break;
             }
         });
@@ -2179,12 +2282,11 @@ public final class MainActivity extends Activity {
         beginPage(); settingsPage = true; browsing = false; sourceTabs.clear();
         LinearLayout page = column(); pageRoot = page;
         LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
-        Button back = button("返回", this::settingsBack); heading.addView(back);
+        Button back = iconButton("back","返回",this::settingsBack); heading.addView(back);
         TextView label = text(title,32); label.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0,-2,1); labelParams.leftMargin = dp(20);
         heading.addView(label,labelParams); page.addView(heading);
-        TextView hint = text("全局默认值 · 新打开的视频使用这些设置",20); hint.setTextColor(SECONDARY);
-        hint.setPadding(0,dp(12),0,dp(18)); page.addView(hint);
+        heading.setPadding(0,0,0,dp(16));
         setContentView(page); buildingPage=false; return page;
     }
 
@@ -2222,7 +2324,8 @@ public final class MainActivity extends Activity {
     private void showPlaybackOptions() {
         if(playing)hideControls.run();
         showItems("更多",new String[]{"字幕","音轨","旋转 / 翻转","定时停止"},choice->{
-            if(choice==0)showSubtitleOptions();else if(choice==1)showAudioOptions();else if(choice==2)showRotation();else showSleepOptions();
+            if(choice==0)showSubtitleOptions();else if(choice==1)showAudioOptions();
+            else if(choice==2)showRotation();else showSleepOptions();
         });
     }
 
@@ -2289,15 +2392,24 @@ public final class MainActivity extends Activity {
     private String speedLabel() { return String.format(Locale.ROOT,"%s×",new java.text.DecimalFormat("0.##").format(settings.getInt("speedSteps",20)/20f)); }
 
     private void showSpeed() {
-        int[] steps={15,20,30,40,50,60}; int selected=-1;for(int i=0;i<steps.length;i++)if(steps[i]==settings.getInt("speedSteps",20))selected=i;
-        showChoices("倍速",new String[]{"0.75×","1×（默认）","1.5×","2.0×","2.5×","3.0×"},selected,index->{
-            settings.edit().putInt("speedSteps",steps[index]).apply();if(prepared)player.setRate(steps[index]/20f);
-            if(speedButton!=null)speedButton.setText(speedLabel());flashNotice(speedLabel());
-        });
+        int[] steps = {15, 20, 30, 40, 50, 60};
+        int previous = settings.getInt("speedSteps", 20);
+        int next = steps[0];
+        for (int i = 0; i < steps.length; i++) {
+            if (steps[i] == previous) { next = steps[(i + 1) % steps.length]; break; }
+        }
+        settings.edit().putInt("speedSteps", next).apply();
+        if (prepared) player.setRate(next / 20f);
+        updateIcon(speedButton,"speed",speedLabel());
+        flashNotice(speedLabel());
     }
 
     private void showAspectOptions() {
-        showChoices("画面比例",new String[]{"适应屏幕","裁剪填充","拉伸铺满","16:9","4:3"},settings.getInt("scale",0),index->{settings.edit().putInt("scale",index).apply();if(player!=null)player.setVideoScale(SCALES[index]);flashNotice(new String[]{"适应屏幕","裁剪填充","拉伸铺满","16:9","4:3"}[index]);});
+        String[] labels = {"适应屏幕", "裁剪填充", "拉伸铺满", "16:9", "4:3"};
+        int next = Math.floorMod(settings.getInt("scale", 0) + 1, labels.length);
+        settings.edit().putInt("scale", next).apply();
+        if (player != null) player.setVideoScale(SCALES[next]);
+        flashNotice(labels[next]);
     }
 
     private void showSubtitleOptions() {
@@ -2390,14 +2502,22 @@ public final class MainActivity extends Activity {
         showSidePanel(dialog, false);
     }
 
-    private void showSidePanel(AlertDialog dialog, boolean keepHiddenAfterDismiss) {
+    void showSidePanel(AlertDialog dialog, boolean keepHiddenAfterDismiss) {
         android.view.Window window = dialog.getWindow();
-        if (window != null) window.setWindowAnimations(true ? R.style.PanelMotion : 0);
+        if(window!=null)window.setWindowAnimations(R.style.PanelMotion);
         showPlaybackDialog(dialog, keepHiddenAfterDismiss);
         if (window == null) return;
         window.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        window.setDimAmount(0.15f);
-        window.setLayout(Math.max(dp(260), getResources().getDisplayMetrics().widthPixels * 35 / 100), -1);
+        window.setDimAmount(.10f);
+        int width=getWindow().getDecorView().getWidth();
+        int height=getWindow().getDecorView().getHeight();
+        if(width<=0)width=getResources().getDisplayMetrics().widthPixels;
+        if(height<=0)height=getResources().getDisplayMetrics().heightPixels;
+        window.setLayout(Math.min(width-dp(24),Math.max(dp(248),width*36/100)),
+                Math.max(dp(160),height-dp(40)));
+        WindowManager.LayoutParams inset=window.getAttributes();
+        inset.x=dp(14);
+        window.setAttributes(inset);
         if (playing) hideControls.run();
     }
 
@@ -2411,7 +2531,7 @@ public final class MainActivity extends Activity {
         boolean restoreChrome = playing && controlsShown && !keepHiddenAfterDismiss;
         playbackDialogOrigin = priorFocus;
         playbackDialog = dialog;
-        ui.removeCallbacks(hideControls);
+        ui.removeCallbacks(autoHideControls);
         dialog.setOnDismissListener(dismissed -> {
             if (playbackDialog != dialog) return;
             playbackDialog = null;
@@ -2427,7 +2547,7 @@ public final class MainActivity extends Activity {
         });
         dialog.show();
         if (dialog.getWindow() != null) {
-            android.graphics.drawable.GradientDrawable surface = buttonBackground(0xd1181818, 0xff464646);
+            android.graphics.drawable.GradientDrawable surface = buttonBackground(0xf21b2327,Color.TRANSPARENT);
             surface.setCornerRadius(dp(18));
             dialog.getWindow().setBackgroundDrawable(surface);
             if (playing) dialog.getWindow().getDecorView().setSystemUiVisibility(
@@ -2436,7 +2556,7 @@ public final class MainActivity extends Activity {
         android.widget.ListView list = dialog.getListView();
         if (list != null) {
             list.setFocusableInTouchMode(true);
-            list.setSelector(buttonBackground(0xff303839, ACCENT));
+            styleListFocus(list,0xff24383e);
             list.setOnHierarchyChangeListener(new android.view.ViewGroup.OnHierarchyChangeListener() {
                 @Override public void onChildViewAdded(View parent, View child) { styleDialogRow(child); }
                 @Override public void onChildViewRemoved(View parent, View child) {}
@@ -2515,7 +2635,7 @@ public final class MainActivity extends Activity {
             @Override public boolean onSingleTapConfirmed(android.view.MotionEvent e){
                 if(!playing || playbackDialog!=null || !video.isAttachedToWindow())return false;
                 exitPromptAt=0;
-                if(controlsShown){ui.removeCallbacks(hideControls);hideControls.run();}
+                if(controlsShown){ui.removeCallbacks(autoHideControls);hideControls.run();}
                 else showControls();
                 return true;
             }
@@ -2545,7 +2665,7 @@ public final class MainActivity extends Activity {
                         long duration=player.getLength();
                         target=Math.max(0,Math.min(duration-1,origin+Math.round(dx/Math.max(1f,view.getWidth())*Math.min(duration,300000L))));
                         if(!controlsShown){showSeekPreview(origin);seekPreviewOrigin=origin;}
-                        else{ui.removeCallbacks(hideControls);flashNotice("定位 "+time(target));}
+                        else{ui.removeCallbacks(autoHideControls);flashNotice("定位 "+time(target));}
                         updateTimeline(target);
                         return true;
                     }
@@ -2572,6 +2692,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showControls() {
+        if(inVideoPip())return;
         seekPreviewShown=false;ui.removeCallbacks(hideSeekPreview);
         for(int i=0;i<controls.getChildCount();i++)controls.getChildAt(i).setVisibility(View.VISIBLE);
         keepControlsHidden = false;
@@ -2585,10 +2706,31 @@ public final class MainActivity extends Activity {
         }
         header.setVisibility(View.VISIBLE);
         controls.setVisibility(View.VISIBLE);
-        ui.removeCallbacks(hideControls);
-        if (prepared && player.isPlaying() && !dragging && !buffering && playbackDialog == null) {
-            ui.postDelayed(hideControls, 4 * 1000L);
+        scheduleVideoHide();
+    }
+
+    private boolean canHideVideoControls(){
+        return playing&&controlsShown&&prepared&&player!=null&&player.isPlaying()
+                &&!dragging&&!buffering&&playbackDialog==null&&!videoTouchActive&&heldVideoKeys.isEmpty();
+    }
+
+    private void scheduleVideoHide(){
+        ui.removeCallbacks(autoHideControls);
+        if(canHideVideoControls())ui.postDelayed(autoHideControls,4000);
+    }
+
+    boolean hasPlaybackDialog(){return playbackDialog!=null;}
+
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event){
+        int action=event.getActionMasked();
+        boolean start=action==android.view.MotionEvent.ACTION_DOWN;
+        boolean end=action==android.view.MotionEvent.ACTION_UP||action==android.view.MotionEvent.ACTION_CANCEL;
+        if(start||end){
+            if(photoViewer!=null)photoViewer.touch(start);
+            if(playing){videoTouchActive=start;ui.removeCallbacks(autoHideControls);}
         }
+        try{return super.dispatchTouchEvent(event);}
+        finally{if(end&&playing)scheduleVideoHide();}
     }
 
     private void togglePlayback() {
@@ -2650,9 +2792,10 @@ public final class MainActivity extends Activity {
         resumeWithoutPrompt = false;
         restorePaused = false;
         pausedPlayback=false;pauseRequested=false;frameCheckPending=false;retainingRecovery=false;recoveryRebuilds=0;
-        gatedPlayer=null;gatedVolume=-1;gatedTrack=Integer.MIN_VALUE;downloadRate.reset();rateSource=null;
+        gatedPlayer=null;gatedVolume=-1;gatedTrack=Integer.MIN_VALUE;
         displayedCounterSeen=decodedCounterFallback=videoTrackKnown=false;dragResumeDesired=false;
         ui.removeCallbacks(loadingTick);
+        heldVideoKeys.clear();videoTouchActive=false;
         buffering = false;
         videoRecovery.cancel();
         retainedSubtitleSession = false;
@@ -2665,7 +2808,7 @@ public final class MainActivity extends Activity {
         if (dialog != null) dialog.dismiss();
         ui.removeCallbacks(tick);
         ui.removeCallbacks(hideSeekPreview);seekPreviewShown=false;
-        ui.removeCallbacks(hideControls);
+        ui.removeCallbacks(autoHideControls);
         if (controls != null) controls.animate().cancel();
         ui.removeCallbacks(applySeek);
         pendingSeek = -1;
@@ -2718,6 +2861,19 @@ public final class MainActivity extends Activity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        int code=event.getKeyCode();
+        boolean operation=code>=KeyEvent.KEYCODE_DPAD_UP&&code<=KeyEvent.KEYCODE_DPAD_CENTER
+                ||code==KeyEvent.KEYCODE_ENTER||code==KeyEvent.KEYCODE_BUTTON_A;
+        if(playing&&operation){
+            if(event.getAction()==KeyEvent.ACTION_DOWN)heldVideoKeys.add(code);
+            else if(event.getAction()==KeyEvent.ACTION_UP)heldVideoKeys.remove(code);
+            ui.removeCallbacks(autoHideControls);
+        }
+        try{return dispatchPlayerKey(event);}
+        finally{if(playing&&operation)scheduleVideoHide();}
+    }
+
+    private boolean dispatchPlayerKey(KeyEvent event) {
         if(playbackDialog==null && (photoViewer!=null && photoViewer.key(event) || musicViewer!=null && musicViewer.key(event)))return true;
         int key = event.getKeyCode();
         boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
@@ -2809,13 +2965,13 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if(photoViewer!=null){if(!photoViewer.back())closeMediaViewer();return;}
-        if(musicViewer!=null){closeMediaViewer();return;}
+        if(photoViewer!=null){photoViewer.back();return;}
+        if(musicViewer!=null){musicViewer.back();return;}
         if(privateIndex){lockPrivate();return;}
         if (playing) {
             if (seekPreviewShown) { hideControls.run(); return; }
             if (controlsShown) {
-                ui.removeCallbacks(hideControls);
+                ui.removeCallbacks(autoHideControls);
                 hideControls.run();
                 exitPromptAt = 0;
             } else {
@@ -2831,12 +2987,60 @@ public final class MainActivity extends Activity {
 
     @Override protected void onStart(){super.onStart();foreground=true;}
 
+    private boolean supportsPip(){
+        return android.os.Build.VERSION.SDK_INT>=26
+                &&getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+
+    private boolean inVideoPip(){
+        return android.os.Build.VERSION.SDK_INT>=26&&isInPictureInPictureMode();
+    }
+
+    private void enterVideoPip(){
+        if(!supportsPip()||!playing||!prepared||player==null||isFinishing())return;
+        android.app.PictureInPictureParams.Builder params=new android.app.PictureInPictureParams.Builder();
+        org.videolan.libvlc.interfaces.IMedia.VideoTrack track=player.getCurrentVideoTrack();
+        int width=track==null?16:track.width,height=track==null?9:track.height;
+        if(width<=0||height<=0||width/(double)height>2.39||width/(double)height<1/2.39){width=16;height=9;}
+        params.setAspectRatio(new android.util.Rational(width,height));
+        if(videoLayout!=null){
+            android.graphics.Rect source=new android.graphics.Rect();
+            if(videoLayout.getGlobalVisibleRect(source))params.setSourceRectHint(source);
+        }
+        try{
+            if(playbackDialog!=null)playbackDialog.dismiss();
+            hideControls.run();playbackNotice.setVisibility(View.GONE);
+            if(!enterPictureInPictureMode(params.build()))showControls();
+        }catch(IllegalStateException|IllegalArgumentException error){
+            flashNotice("画中画暂时不可用");
+        }
+    }
+
+    @Override protected void onUserLeaveHint(){
+        super.onUserLeaveHint();
+        if(playing&&!pickingSubtitle&&!screenOff)enterVideoPip();
+    }
+
+    @Override public void onPictureInPictureModeChanged(boolean pip,android.content.res.Configuration config){
+        super.onPictureInPictureModeChanged(pip,config);
+        if(!playing)return;
+        if(pip){
+            ui.removeCallbacks(autoHideControls);hideControls.run();
+            playbackNotice.setVisibility(View.GONE);loadingOverlay.setVisibility(View.GONE);
+        }else if(!isFinishing()&&videoLayout!=null){
+            videoLayout.post(()->{
+                if(playing&&videoLayout!=null)videoLayout.requestLayout();
+            });
+        }
+    }
+
     @Override protected void onStop() {
         super.onStop();
         foreground=false;pinEpoch++;
         if(pinDialog!=null)pinDialog.dismiss();
+        if(inVideoPip()){if(prepared)requestPause(true);return;}
         if(privateMode){lockPrivate();return;}
-        if(photoViewer!=null||musicViewer!=null)closeMediaViewer();
+        if(photoViewer!=null)closeMediaViewer();
         if (playing && !screenOff && !pickingSubtitle) leaveVideo("");
     }
 
@@ -2876,7 +3080,7 @@ public final class MainActivity extends Activity {
     private void chooseMediaFilter(){
         showChoices("显示媒体",new String[]{"视频","图片","音乐","全部"},mediaFilter,i->{
             mediaFilter=i;
-            settings.edit().putInt("mediaFilter",i).apply();
+            settings.edit().putInt("mediaFilterV2",i).apply();
             renderBrowser("",true);
         });
     }
@@ -2907,16 +3111,6 @@ public final class MainActivity extends Activity {
                 @Override public void close()throws IOException{try{super.close();}finally{file.close();}}
             };
         }catch(IOException|RuntimeException error){file.close();throw error;}
-    }
-
-    SmbPlaybackServer musicBridge(Entry song)throws IOException{
-        CIFSContext context=connection;
-        if(context==null)throw new IOException("SMB unavailable");
-        return new SmbPlaybackServer(song.url,context,getCacheDir());
-    }
-
-    void closeMusicBridge(SmbPlaybackServer bridge){
-        if(!network.isShutdown())network.execute(bridge::stop);else bridge.stop();
     }
 
     private void releaseMediaViewers(){
@@ -2963,8 +3157,14 @@ public final class MainActivity extends Activity {
                 if(token!=request||epoch!=pinEpoch||!foreground||isFinishing()||isDestroyed()||screenOff)return;
                 if(verified){pinFailures=0;granted.run();}
                 else{
-                    if(++pinFailures>=5){pinRetryAt=android.os.SystemClock.elapsedRealtime()+30000;pinFailures=0;}
-                    android.widget.Toast.makeText(this,"PIN 验证失败",android.widget.Toast.LENGTH_SHORT).show();
+                    if(++pinFailures>=5){
+                        pinRetryAt=android.os.SystemClock.elapsedRealtime()+30000;
+                        pinFailures=0;
+                        android.widget.Toast.makeText(this,"请稍后再试",android.widget.Toast.LENGTH_SHORT).show();
+                    }else{
+                        android.widget.Toast.makeText(this,"PIN 验证失败",android.widget.Toast.LENGTH_SHORT).show();
+                        if(!create)promptPin("重新输入 PIN",retry->checkPin(retry,false,granted));
+                    }
                 }
             });
         });
@@ -2975,26 +3175,37 @@ public final class MainActivity extends Activity {
         pad.setPadding(dp(16),dp(6),dp(16),dp(12));
         TextView dots=text("○ ○ ○ ○ ○ ○",24);dots.setGravity(Gravity.CENTER);pad.addView(dots);
         StringBuilder pin=new StringBuilder();
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(pad).setNegativeButton("取消",null).create();
-        String[] keys={"1","2","3","4","5","6","7","8","9","⌫","0","确定"};
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(pad).create();
+        String[] keys={"1","2","3","4","5","6","7","8","9","","0","⌫"};
         Button[] buttons=new Button[keys.length];
-        for(int row=0;row<2;row++){
+        for(int row=0;row<4;row++){
             LinearLayout line=new LinearLayout(this);pad.addView(line);
-            for(int col=0;col<6;col++){
-                String value=keys[row*6+col];
+            for(int col=0;col<3;col++){
+                String value=keys[row*3+col];
+                if(value.isEmpty()){
+                    line.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
+                    continue;
+                }
                 Button key=button(value,()->{
-                    if("确定".equals(value)){
-                        if(pin.length()==6){String entered=pin.toString();dialog.dismiss();result.accept(entered);}
-                        return;
+                    if("⌫".equals(value)){
+                        if(pin.length()>0)pin.setLength(pin.length()-1);
+                    } else if(pin.length()<6) {
+                        pin.append(value);
+                        if(pin.length()==6){
+                            String entered=pin.toString();
+                            dialog.dismiss();
+                            result.accept(entered);
+                            return;
+                        }
                     }
-                    if("⌫".equals(value)){if(pin.length()>0)pin.setLength(pin.length()-1);}
-                    else if(pin.length()<6)pin.append(value);
                     StringBuilder masked=new StringBuilder();
                     for(int i=0;i<6;i++)masked.append(i<pin.length()?"● ":"○ ");
                     dots.setText(masked.toString().trim());
                 });
                 key.setMinWidth(0);key.setPadding(0,0,0,0);key.setTextSize(20);
-                buttons[row*6+col]=key;line.addView(key,new LinearLayout.LayoutParams(0,dp(52),1));
+                if("⌫".equals(value))key.setContentDescription("退格");
+                buttons[row*3+col]=key;int height = Math.min(dp(52), Math.max(dp(32), (getResources().getDisplayMetrics().heightPixels - dp(200)) / 4));
+                line.addView(key,new LinearLayout.LayoutParams(0,height,1));
             }
         }
         dialog.setOnKeyListener((d,key,event)->{
@@ -3036,6 +3247,54 @@ public final class MainActivity extends Activity {
         if(activePreviewSource!=null)activePreviewSource.cancel();
     }
 
+    private void showPinSettings() {
+        showItems("PIN 设置", new String[]{"修改 PIN", "清除 PIN"}, choice -> {
+            if (android.os.SystemClock.elapsedRealtime() < pinRetryAt) {
+                android.widget.Toast.makeText(this, "请稍后再试", android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            promptPin("输入当前 PIN", oldPin -> checkPin(oldPin, false, () -> {
+                if (choice == 0) {
+                    promptPin("输入新 PIN", newPin -> promptPin("再次输入新 PIN", confirmation -> {
+                        if (!newPin.equals(confirmation)) {
+                            android.widget.Toast.makeText(this, "两次输入不一致", android.widget.Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        updatePin(newPin);
+                    }));
+                    return;
+                }
+                AlertDialog confirm = new AlertDialog.Builder(this).setTitle("清除 PIN？")
+                        .setMessage("本地和 SMB 的隐私项目都会恢复到普通列表。")
+                        .setNegativeButton("取消", null).setPositiveButton("清除", (dialog, button) -> updatePin(null))
+                        .create();
+                showPlaybackDialog(confirm);
+                confirm.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocusFromTouch();
+            }));
+        });
+    }
+
+    private void updatePin(String replacement) {
+        if (!privateIndex || !privateMode || !foreground || screenOff) return;
+        int epoch = pinEpoch;
+        network.execute(() -> {
+            boolean saved;
+            try {
+                saved = replacement == null ? privateLibrary.clearPin() : privateLibrary.savePin(replacement);
+            } catch (Exception error) {
+                saved = false;
+            }
+            boolean success = saved;
+            ui.post(() -> {
+                if (epoch != pinEpoch || isDestroyed() || !foreground) return;
+                if (success) lockPrivate();
+                android.widget.Toast.makeText(this, success
+                        ? (replacement == null ? "已清除 PIN" : "PIN 已修改")
+                        : "无法保存 PIN 设置", android.widget.Toast.LENGTH_SHORT).show();
+            });
+        });
+    }
+
     private void showPrivateIndex(){
         beginPage();++request;privateMode=true;privateIndex=true;privateFolderTarget=null;privateFileTarget=null;privateBoundary=null;
         browsing=false;localTree=null;localParents.clear();currentUrl=null;
@@ -3043,18 +3302,8 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         LinearLayout page=column();pageRoot=page;addSourceNavigation(page,sourceKind);
         LinearLayout actions=new LinearLayout(this);
-        if(privateRecords().length()==0 && privateLibrary.marks().isEmpty()){
-            actions.addView(iconButton("more","清除 PIN",()->{
-                AlertDialog dialog=new AlertDialog.Builder(this).setTitle("清除隐私 PIN？")
-                        .setMessage("下次使用隐私列表时可以设置新的 PIN。")
-                        .setNegativeButton("取消",null).setPositiveButton("清除",(d,w)->{
-                            privacyPrefs().edit().remove("pin").remove("salt").apply();
-                            lockPrivate();
-                        }).create();
-                showPlaybackDialog(dialog);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocusFromTouch();
-            }));
-        }
-        moduleHeading.addView(actions);
+        actions.addView(iconButton("lock","PIN 设置",this::showPinSettings));
+        attachModuleActions(actions);
         ScrollView scroll=new ScrollView(this);LinearLayout rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(rows);page.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         View preferred=sourceTabs.get(sourceKind);
