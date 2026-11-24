@@ -27,6 +27,7 @@ final class MusicViewer implements AutoCloseable {
     private boolean paneControls;
     private boolean paneReady;
     private boolean paneMoving;
+    private int paneTopInset=-1, paneBottomInset=-1;
     private final TextView title, artist, time, bufferingRate;
     private final ImageView cover, artworkBackground;
     private final android.animation.ValueAnimator coverRotation;
@@ -193,15 +194,23 @@ final class MusicViewer implements AutoCloseable {
         LinearLayout.LayoutParams coverSpace=new LinearLayout.LayoutParams(coverSize,coverSize);
         coverSpace.bottomMargin=host.dp(8);
         info.addView(cover,coverSpace);
-        info.addOnLayoutChangeListener((view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->{
-            int size=Math.min(coverSize,Math.min((right-left)*3/4,(bottom-top)*11/20));
+        title=host.text("",25);title.setGravity(Gravity.CENTER);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);info.addView(title);
+        artist=host.text("",21);artist.setTextColor(MainActivity.SECONDARY);artist.setGravity(Gravity.CENTER);artist.setSingleLine(true);info.addView(artist);
+        Runnable fitCover=()->{
+            int availableHeight=info.getHeight()-info.getPaddingTop()-info.getPaddingBottom();
+            Paint.FontMetricsInt titleFont=title.getPaint().getFontMetricsInt(),artistFont=artist.getPaint().getFontMetricsInt();
+            int labels=titleFont.bottom-titleFont.top+title.getCompoundPaddingTop()+title.getCompoundPaddingBottom()
+                    +artistFont.bottom-artistFont.top+artist.getCompoundPaddingTop()+artist.getCompoundPaddingBottom();
+            int heightLimit=Math.min(availableHeight*11/20,availableHeight-labels-coverSpace.bottomMargin);
+            int size=Math.min(coverSize,Math.min(info.getWidth()*3/4,heightLimit));
             if(size>0&&size!=coverSpace.width){
                 coverSpace.width=coverSpace.height=size;
                 cover.setLayoutParams(coverSpace);
             }
-        });
-        title=host.text("",25);title.setGravity(Gravity.CENTER);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);info.addView(title);
-        artist=host.text("",21);artist.setTextColor(MainActivity.SECONDARY);artist.setGravity(Gravity.CENTER);artist.setSingleLine(true);info.addView(artist);
+        };
+        info.addOnLayoutChangeListener((view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->fitCover.run());
+        title.addOnLayoutChangeListener((view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->fitCover.run());
+        artist.addOnLayoutChangeListener((view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->fitCover.run());
         GestureDetector swipe=new GestureDetector(host,new GestureDetector.SimpleOnGestureListener(){
             @Override public boolean onDown(MotionEvent e){return true;}
             @Override public boolean onSingleTapConfirmed(MotionEvent e){toggleControls();return true;}
@@ -267,22 +276,27 @@ final class MusicViewer implements AutoCloseable {
         rightPane.addView(queuePanel,queueSpace);
         queuePanel.setVisibility(View.GONE);
         fitPane=()->{
-            int height=rightPane.getHeight();
+            int height=body.getHeight();
             if(height<=0)return;
+            boolean visibleControls=controlsShown&&!queueOpen;
+            // The content can lay out before the overlaid controls on the first frame.
+            if(visibleControls&&bottomControls.getHeight()<=0)return;
             int reserved=bottomControls.getHeight()+host.dp(8);
             int topInset=Math.min(host.dp(56),height/10);
-            int bottomInset=controlsShown&&!queueOpen?Math.max(topInset,reserved):topInset;
-            int balance=bottomInset-topInset;
-            boolean visibleControls=controlsShown&&!queueOpen;
-            if(!paneReady||paneControls!=visibleControls){
+            int bottomInset=visibleControls?Math.max(topInset,reserved):topInset;
+            boolean controlsChanged=paneReady&&paneControls!=visibleControls;
+            if(!paneReady||controlsChanged||paneTopInset!=topInset||paneBottomInset!=bottomInset){
                 if(paneMotion!=null){paneMotion.removeAllListeners();paneMotion.cancel();}
                 paneControls=visibleControls;
+                paneTopInset=topInset;paneBottomInset=bottomInset;
                 lyricSpace.topMargin=topInset;
                 int from=lyricSpace.bottomMargin;
-                if(!paneReady){
+                if(!controlsChanged){
+                    paneMoving=false;
                     lyricSpace.bottomMargin=bottomInset;
                     lyricsView.setLayoutParams(lyricSpace);
-                    info.setPadding(0,0,0,balance);
+                    info.setPadding(0,topInset,0,bottomInset);
+                    fitCover.run();
                     paneReady=true;
                 }else{
                     paneMoving=true;
@@ -292,7 +306,8 @@ final class MusicViewer implements AutoCloseable {
                     paneMotion.addUpdateListener(animation->{
                         lyricSpace.bottomMargin=(int)animation.getAnimatedValue();
                         lyricsView.setLayoutParams(lyricSpace);
-                        info.setPadding(0,0,0,Math.max(0,lyricSpace.bottomMargin-topInset));
+                        info.setPadding(0,topInset,0,lyricSpace.bottomMargin);
+                        fitCover.run();
                     });
                     paneMotion.addListener(new android.animation.AnimatorListenerAdapter(){
                         @Override public void onAnimationEnd(android.animation.Animator animation){
@@ -315,6 +330,7 @@ final class MusicViewer implements AutoCloseable {
                 queuePanel.setLayoutParams(queueSpace);
             }
         };
+        body.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitPane.run());
         rightPane.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitPane.run());
         bottomControls.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitPane.run());
         adapter=new BaseAdapter(){
@@ -541,7 +557,6 @@ final class MusicViewer implements AutoCloseable {
         lyricsView.setVisibility(!queueOpen&&!lyrics.isEmpty()?View.VISIBLE:View.GONE);
         queuePanel.setVisibility(queueOpen?View.VISIBLE:View.GONE);
         rightPane.setVisibility(queueOpen||!lyrics.isEmpty()?View.VISIBLE:View.GONE);
-        if(!queueOpen&&lyrics.isEmpty()&&info.getPaddingBottom()!=0)info.setPadding(0,0,0,0);
         rightPane.post(fitPane);
     }
 
