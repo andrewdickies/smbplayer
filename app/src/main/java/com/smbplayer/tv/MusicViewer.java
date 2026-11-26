@@ -108,12 +108,13 @@ final class MusicViewer implements AutoCloseable {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if(closed)return;
-            if(player!=null) {
-                long reported=player.getTime(), position=Math.max(0,reported), length=player.getLength();
+            MediaPlayer active=activePlayer();
+            if(active!=null) {
+                long reported=active.getTime(), position=Math.max(0,reported), length=active.getLength();
                 if(length>0)lastDuration=length;
                 long shown=seekPreview&&previewTarget>=0?previewTarget:position;
                 if(!dragging){int value=length>0?(int)(shown*1000/length):0;if(progress.getProgress()!=value)progress.setProgress(value);}
-                progress.setEnabled(player.isSeekable()&&length>0);
+                progress.setEnabled(active.isSeekable()&&length>0);
                 refreshCache(position, length);
                 String label=labelTime(shown)+" / "+labelTime(length);
                 if(seekPreview)label+="   "+String.format(Locale.ROOT,"%+d s",(shown-previewOrigin)/1000);
@@ -537,9 +538,18 @@ final class MusicViewer implements AutoCloseable {
 
     private void cancelAutoHide(){ui.removeCallbacks(autoHide);}
 
+    /** Switching songs releases the old player before the new one exists; never trust the cached reference. */
+    private MediaPlayer activePlayer(){
+        MusicPlaybackService service=playback;
+        if(service!=null){player=service.player();server=service.server();}
+        MediaPlayer current=player;
+        return current==null||current.isReleased()?null:current;
+    }
+
     private boolean canAutoHide(){
+        MediaPlayer active=activePlayer();
         return controlsShown&&!queueOpen&&!paused&&!dragging&&!touchActive&&heldKeys.isEmpty()
-                &&automatic&&player!=null&&player.isPlaying();
+                &&automatic&&active!=null&&active.isPlaying();
     }
 
     private void scheduleHide(){
@@ -596,8 +606,9 @@ final class MusicViewer implements AutoCloseable {
     }
 
     private void seekFromHidden(int direction,int repeats){
-        if(player==null||!player.isSeekable()||player.getLength()<=0)return;
-        long current=Math.max(0,player.getTime()),length=player.getLength();
+        MediaPlayer active=activePlayer();
+        if(active==null||!active.isSeekable()||active.getLength()<=0)return;
+        long current=Math.max(0,active.getTime()),length=active.getLength();
         if(!seekPreview){previewOrigin=current;previewTarget=current;}
         long step=TvSeekPolicy.stepMillis(host.seekStep(),repeats);
         previewTarget=Math.max(0,Math.min(length-1,previewTarget+direction*step));
@@ -927,9 +938,10 @@ final class MusicViewer implements AutoCloseable {
         setFollowing(true);
         if(controlsShown)play.requestFocusFromTouch();
     }
-    private void seekProgress(int value){if(player!=null)seek(player.getLength()*value/1000);}
+    private void seekProgress(int value){MediaPlayer active=activePlayer();if(active!=null)seek(active.getLength()*value/1000);}
     private void seek(long value){
-        if(player==null||!player.isSeekable())return;
+        MediaPlayer active=activePlayer();
+        if(active==null||!active.isSeekable())return;
         long target=Math.max(0,value);
         lyricTime=lyricSeekTarget=target;
         lyricSeekStarted=SystemClock.uptimeMillis();

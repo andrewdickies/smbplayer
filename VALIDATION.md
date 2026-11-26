@@ -1,3 +1,9 @@
+# 1.2.3 验证记录
+
+- 在 16th Plus（Android 8.1）上复现 1.2.2 的切歌闪退：SMB 音乐目录播放中按下一首，约 28 ms 后抛出 `IllegalStateException: can't get VLCObject instance`（`MediaPlayer.getTime`），进程退出。日志显示旧播放器刚释放，进度刷新仍在读取它。
+- 修复后同一设备同一目录连续切换 6 首，覆盖切歌过程中暂停 / 继续、隐藏控制栏下的左右键快退 / 快进，进程保持不变；媒体会话位置持续前进（约 49 秒），没有新的 AndroidRuntime 异常。
+- release 构建与 lintVitalRelease 通过，APK 为 1.2.3 / versionCode 123，armeabi-v7a；与已装 1.2.2 同签名覆盖安装成功。
+
 # 1.2.2 验证记录
 
 - K30 本次未在线，使用在线的 16th Plus（Android 8.1）全程静音验证音乐页。

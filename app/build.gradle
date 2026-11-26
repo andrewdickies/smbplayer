@@ -6,8 +6,8 @@ android {
         applicationId 'com.smbplayer.tv'
         minSdk 23
         targetSdk 34
-        versionCode 122
-        versionName '1.2.2'
+        versionCode 123
+        versionName '1.2.3'
         ndk { abiFilters 'armeabi-v7a' }
     }
     compileOptions {

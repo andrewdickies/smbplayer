@@ -2254,7 +2254,7 @@ public final class MainActivity extends Activity {
                 case 2:showSubtitleSize();break;
                 case 3:showChoices("播放结束",new String[]{"顺序播放","单集循环","列表循环"},Math.floorMod(settings.getInt("loop",0),3),i->settings.edit().putInt("loop",i).apply());break;
                 case 4:showCompatibilitySettings();break;
-                case 5:showSettingsInfo("关于","smbplayer 1.2.2");break;
+                case 5:showSettingsInfo("关于","smbplayer 1.2.3");break;
                 default:break;
             }
         });
